@@ -1,0 +1,620 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #151411;
+  color: #eeeae1;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #171612;
+}
+
+.top-bar {
+  display: grid;
+  flex: 0 0 52px;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto 36px;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid #343028;
+  background: #201e19;
+}
+
+.repo-title,
+.repo-meta,
+.repo-meta span,
+.refresh-indicator,
+.file-heading,
+.change-counts,
+.sidebar-heading,
+.search-button,
+.command-input-wrap,
+[cmdk-item] {
+  display: flex;
+  align-items: center;
+}
+
+.repo-title {
+  min-width: 0;
+  gap: 9px;
+}
+
+.repo-title div {
+  min-width: 0;
+}
+
+.repo-title strong,
+.repo-title span,
+.file-heading strong,
+.file-heading span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-title strong {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.repo-title span {
+  color: #a8a196;
+  font-size: 12px;
+}
+
+.repo-meta {
+  gap: 8px;
+  color: #c3bbae;
+  font-size: 12px;
+}
+
+.refresh-indicator {
+  gap: 6px;
+  height: 26px;
+  color: #bfb7aa;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.repo-meta span {
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #3c372e;
+  border-radius: 6px;
+  background: #171612;
+}
+
+.icon-button,
+.search-button,
+.text-icon-button {
+  border: 1px solid #3c372e;
+  color: #eeeae1;
+  background: #24211b;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+}
+
+.icon-button:hover,
+.search-button:hover,
+.text-icon-button:hover {
+  background: #2d2a23;
+}
+
+.text-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: #d7d0c4;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.text-icon-button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.cli-install-message {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid #343028;
+  overflow: hidden;
+  color: #d7d0c4;
+  background: #19241f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cli-install-error {
+  color: #ffe2dd;
+  background: #321d1b;
+}
+
+.workspace {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 300px minmax(0, 1fr);
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar {
+  display: grid;
+  grid-template-rows: 42px minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid #343028;
+  background: #1d1b17;
+}
+
+.sidebar-heading {
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid #343028;
+  color: #d7d0c4;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.search-button {
+  gap: 6px;
+  height: 27px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: #bfb7aa;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.file-tree-host {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.file-tree-scroll {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.sidebar-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px;
+  color: #a8a196;
+  font-size: 13px;
+}
+
+.diff-panel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #151411;
+}
+
+.diff-view {
+  display: grid;
+  grid-template-rows: 46px minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+}
+
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid #343028;
+  background: #1b1915;
+}
+
+.diff-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 12px;
+  min-width: 0;
+}
+
+.file-heading {
+  min-width: 0;
+  gap: 8px;
+}
+
+.file-heading strong {
+  max-width: min(760px, 56vw);
+  color: #f3efe6;
+  font-size: 13px;
+}
+
+.file-heading span {
+  max-width: min(460px, 30vw);
+  color: #928a7f;
+  font-size: 12px;
+}
+
+.change-counts {
+  flex: 0 0 auto;
+  gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.additions {
+  color: #72d08a;
+}
+
+.deletions {
+  color: #ff867c;
+}
+
+.status-pill {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #ebe6dd;
+  background: #3a352b;
+}
+
+.status-added,
+.status-untracked {
+  background: #1f5c3e;
+}
+
+.status-deleted {
+  background: #74312d;
+}
+
+.status-renamed {
+  background: #37557a;
+}
+
+.status-code {
+  background: #3a352b;
+}
+
+.view-mode-switch {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid #3c372e;
+  border-radius: 7px;
+  background: #24211b;
+}
+
+.view-mode-switch button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 24px;
+  min-width: 68px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  color: #a8a196;
+  background: transparent;
+  font-size: 12px;
+}
+
+.view-mode-switch button:hover {
+  color: #eeeae1;
+  background: #2d2a23;
+}
+
+.view-mode-switch button.active {
+  color: #f4efe6;
+  background: #35564b;
+}
+
+.diff-renderer {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overflow-x: clip;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  contain: strict;
+  will-change: scroll-position;
+  scrollbar-gutter: stable;
+  background: #151411;
+}
+
+.diff-renderer diffs-container {
+  overflow: clip;
+  contain: layout paint style;
+}
+
+.find-bar {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(520px, calc(100% - 24px));
+  min-width: 0;
+  height: 34px;
+  padding: 4px 5px 4px 10px;
+  border: 1px solid #4a4338;
+  border-radius: 8px;
+  color: #a8a196;
+  background: #201e19;
+  box-shadow: 0 10px 34px rgb(0 0 0 / 35%);
+}
+
+.find-bar input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  color: #f4efe6;
+  background: transparent;
+  font-size: 13px;
+}
+
+.find-count {
+  flex: 0 0 50px;
+  color: #a8a196;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.find-bar .icon-button {
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+}
+
+.find-bar .icon-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.center-state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 24px;
+  color: #a8a196;
+  text-align: center;
+}
+
+.center-state h1 {
+  margin: 0;
+  color: #eeeae1;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.center-state p {
+  max-width: 620px;
+  margin: 0;
+  color: #a8a196;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.error-state svg {
+  color: #ff8a7d;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+[cmdk-overlay] {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 42%);
+}
+
+.command-dialog {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  width: min(720px, calc(100vw - 28px));
+  max-height: min(620px, 76vh);
+  transform: translateX(-50%);
+  overflow: hidden;
+  border: 1px solid #443e34;
+  border-radius: 8px;
+  background: #201e19;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 44%);
+}
+
+.command-input-wrap {
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #343028;
+  color: #9e968b;
+}
+
+[cmdk-input] {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: #f2eee6;
+  background: transparent;
+}
+
+[cmdk-list] {
+  max-height: min(540px, calc(76vh - 54px));
+  overflow: auto;
+  padding: 8px;
+}
+
+[cmdk-group-heading] {
+  padding: 7px 8px;
+  color: #928a7f;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+[cmdk-item] {
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: #e6dfd3;
+  font-size: 13px;
+}
+
+[cmdk-item][data-selected="true"] {
+  background: #28443a;
+}
+
+[cmdk-item] span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[cmdk-item] small {
+  color: #9e968b;
+  font-size: 12px;
+}
+
+[cmdk-empty] {
+  padding: 16px 8px;
+  color: #a8a196;
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #d0a85f;
+}
+
+.status-dot.status-added,
+.status-dot.status-untracked {
+  background: #66c282;
+}
+
+.status-dot.status-deleted {
+  background: #e46f65;
+}
+
+.status-dot.status-renamed {
+  background: #77a6df;
+}
+
+@media (max-width: 760px) {
+  .workspace {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .repo-meta {
+    display: none;
+  }
+
+  .top-bar {
+    grid-template-columns: minmax(0, 1fr) auto auto 36px;
+  }
+
+  .refresh-indicator,
+  .text-icon-button span {
+    display: none;
+  }
+
+  .diff-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .diff-view {
+    grid-template-rows: 82px minmax(0, 1fr);
+  }
+
+  .diff-toolbar-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .view-mode-switch button {
+    min-width: 58px;
+  }
+
+  .find-bar {
+    top: 54px;
+    right: 8px;
+    width: calc(100% - 16px);
+  }
+}

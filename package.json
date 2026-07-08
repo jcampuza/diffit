@@ -1,0 +1,49 @@
+{
+  "name": "diffit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "bin": {
+    "diffit": "./bin/diffit.mjs"
+  },
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:vite": "vite --host 127.0.0.1 --port 1420",
+    "build": "tauri build",
+    "build:vite": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pierre/diffs": "^1.2.12",
+    "@pierre/theme": "1.1.0",
+    "@pierre/trees": "^1.0.0-beta.5",
+    "@tanstack/react-store": "^0.11.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "cmdk": "^1.1.1",
+    "lucide-react": "^1.23.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@babel/core": "^8.0.1",
+    "@eslint/js": "^9",
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/babel__core": "^7.20.5",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "eslint": "^9",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.63.0",
+    "vite": "^8.1.3"
+  }
+}
