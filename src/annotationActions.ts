@@ -96,6 +96,20 @@ export async function deleteAnnotation(id: string) {
   }
 }
 
+export async function clearAnnotations(statuses?: AnnotationStatus[]) {
+  const cwd = appStore.state.repository?.repoRoot;
+  if (!cwd) {
+    return;
+  }
+
+  try {
+    const state = await invoke<AnnotationsState>("clear_annotations", { cwd, statuses });
+    appActions.setAnnotations(state);
+  } catch (clearError) {
+    console.error("Could not clear annotations:", clearError);
+  }
+}
+
 export async function listenForAnnotationChanges() {
   return listen<RepositoryChanged>("annotations-changed", (event) => {
     void loadAnnotations(event.payload.cwd);

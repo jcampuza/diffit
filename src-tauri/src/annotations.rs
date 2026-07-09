@@ -28,7 +28,7 @@ pub enum AnnotationSide {
     New,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum AnnotationStatus {
     Open,
@@ -452,6 +452,39 @@ pub fn update_annotation(
         annotation.status = parse_status(&status)?;
     }
     annotation.updated_at = utc_rfc3339_now();
+
+    write_annotations_file(&review_path, &annotations_file)?;
+
+    Ok(AnnotationsState {
+        annotations: annotations_file.annotations,
+        review_path: review_path.to_string_lossy().into_owned(),
+    })
+}
+
+#[command]
+pub fn clear_annotations(
+    cwd: Option<String>,
+    statuses: Option<Vec<String>>,
+) -> Result<AnnotationsState, String> {
+    let cwd = resolve_cwd(cwd)?;
+    let repo_root = resolve_repo_root(&cwd)?;
+    let review_path = resolve_review_path(&repo_root)?;
+
+    let _guard = acquire_review_lock()?;
+    let mut annotations_file = read_annotations_file(&review_path)?;
+
+    match statuses {
+        None => annotations_file.annotations.clear(),
+        Some(statuses) => {
+            let allowed: HashSet<AnnotationStatus> = statuses
+                .iter()
+                .map(|status| parse_status(status))
+                .collect::<Result<HashSet<_>, _>>()?;
+            annotations_file
+                .annotations
+                .retain(|annotation| !allowed.contains(&annotation.status));
+        }
+    }
 
     write_annotations_file(&review_path, &annotations_file)?;
 

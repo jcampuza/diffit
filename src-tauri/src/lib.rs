@@ -251,6 +251,7 @@ pub fn run() {
         .manage(RepositoryWatcherState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            annotations::clear_annotations,
             annotations::create_annotation,
             annotations::delete_annotation,
             annotations::load_annotations,

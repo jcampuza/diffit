@@ -1,5 +1,6 @@
-import { MessageSquareText, X } from "lucide-react";
-import { useMemo } from "react";
+import { Check, MessageSquareText, RotateCcw, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { clearAnnotations, deleteAnnotation, setAnnotationStatus } from "../../annotationActions";
 import { appActions, useShallowAppSelector } from "../../store";
 import type { Annotation } from "../../types";
 import { basename } from "../../utils/path";
@@ -12,14 +13,20 @@ interface AnnotationGroup {
 }
 
 export function AnnotationsPanel() {
-  const { annotations, open } = useShallowAppSelector((state) => ({
+  const { annotations, diffPaths, open } = useShallowAppSelector((state) => ({
     annotations: state.annotations,
+    diffPaths: state.repository?.files.map((file) => file.path) ?? [],
     open: state.annotationsPanelOpen,
   }));
 
   const groups = useMemo(() => groupAnnotations(annotations), [annotations]);
+  const diffPathSet = useMemo(() => new Set(diffPaths), [diffPaths]);
   const openCount = useMemo(
     () => annotations.filter((annotation) => annotation.status === "open").length,
+    [annotations],
+  );
+  const hasResolved = useMemo(
+    () => annotations.some((annotation) => annotation.status === "resolved"),
     [annotations],
   );
 
@@ -34,18 +41,32 @@ export function AnnotationsPanel() {
           Comments
           {openCount > 0 ? <span className="annotations-panel-count">{openCount}</span> : null}
         </span>
-        <button
-          className="icon-button"
-          type="button"
-          title="Close comments panel"
-          onClick={() => appActions.setAnnotationsPanelOpen(false)}
-        >
-          <X aria-hidden="true" size={15} />
-        </button>
+        <div className="annotations-panel-heading-actions">
+          {hasResolved ? (
+            <ClearButton
+              confirmLabel="Clear resolved?"
+              label="Clear resolved"
+              onConfirm={() => clearAnnotations(["resolved"])}
+            />
+          ) : null}
+          {annotations.length > 0 ? (
+            <ClearButton confirmLabel="Clear all?" label="Clear" onConfirm={() => clearAnnotations()} />
+          ) : null}
+          <button
+            className="icon-button"
+            type="button"
+            title="Close comments panel"
+            onClick={() => appActions.setAnnotationsPanelOpen(false)}
+          >
+            <X aria-hidden="true" size={15} />
+          </button>
+        </div>
       </div>
       <div className="annotations-panel-list">
         {groups.length > 0 ? (
-          groups.map((group) => <AnnotationGroupSection key={group.file} group={group} />)
+          groups.map((group) => (
+            <AnnotationGroupSection key={group.file} diffPathSet={diffPathSet} group={group} />
+          ))
         ) : (
           <div className="annotations-panel-empty">
             <MessageSquareText aria-hidden="true" size={22} />
@@ -58,7 +79,60 @@ export function AnnotationsPanel() {
   );
 }
 
-function AnnotationGroupSection({ group }: { group: AnnotationGroup }) {
+function ClearButton({
+  confirmLabel,
+  label,
+  onConfirm,
+}: {
+  confirmLabel: string;
+  label: string;
+  onConfirm: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <button
+      className="annotations-panel-clear-button"
+      type="button"
+      onClick={() => {
+        if (confirming) {
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+          }
+          setConfirming(false);
+          onConfirm();
+          return;
+        }
+
+        setConfirming(true);
+        timeoutRef.current = setTimeout(() => {
+          setConfirming(false);
+          timeoutRef.current = null;
+        }, 3000);
+      }}
+    >
+      {confirming ? confirmLabel : label}
+    </button>
+  );
+}
+
+function AnnotationGroupSection({
+  diffPathSet,
+  group,
+}: {
+  diffPathSet: ReadonlySet<string>;
+  group: AnnotationGroup;
+}) {
   return (
     <div className="annotations-panel-group">
       <div className="annotations-panel-group-heading">
@@ -67,38 +141,90 @@ function AnnotationGroupSection({ group }: { group: AnnotationGroup }) {
         <span className="annotations-panel-group-count">{group.annotations.length}</span>
       </div>
       {group.annotations.map((annotation) => (
-        <AnnotationRow key={annotation.id} annotation={annotation} />
+        <AnnotationRow key={annotation.id} annotation={annotation} inDiff={diffPathSet.has(annotation.file)} />
       ))}
     </div>
   );
 }
 
-function AnnotationRow({ annotation }: { annotation: Annotation }) {
+function AnnotationRow({ annotation, inDiff }: { annotation: Annotation; inDiff: boolean }) {
   const lineLabel =
     annotation.startLine === annotation.endLine
       ? `line ${annotation.startLine}`
       : `lines ${annotation.startLine}–${annotation.endLine}`;
 
+  const jump = () => {
+    appActions.selectPath(annotation.file);
+    appActions.requestAnnotationJump(annotation.file, annotation.side, annotation.startLine);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      jump();
+    }
+  };
+
   return (
-    <button
-      className="annotations-panel-row"
-      type="button"
-      onClick={() => {
-        appActions.selectPath(annotation.file);
-        appActions.requestAnnotationJump(annotation.file, annotation.side, annotation.startLine);
-      }}
+    <div
+      className={`annotations-panel-row${inDiff ? "" : " annotations-panel-row-orphaned"}`}
+      role={inDiff ? "button" : undefined}
+      tabIndex={inDiff ? 0 : undefined}
+      onClick={inDiff ? jump : undefined}
+      onKeyDown={inDiff ? handleKeyDown : undefined}
     >
       <div className="annotations-panel-row-meta">
         <span className={`annotation-status-pill annotation-status-${annotation.status}`}>{annotation.status}</span>
         <span className="annotations-panel-row-line">
           {annotation.side === "old" ? `old ${lineLabel}` : lineLabel}
         </span>
-        {annotation.replies.length > 0 ? (
-          <span className="annotations-panel-row-replies">{annotation.replies.length} replies</span>
-        ) : null}
+        <span className="annotations-panel-row-meta-end">
+          {!inDiff ? <span className="annotations-panel-row-not-in-diff">not in diff</span> : null}
+          {annotation.replies.length > 0 ? (
+            <span className="annotations-panel-row-replies">{annotation.replies.length} replies</span>
+          ) : null}
+          <span className="annotations-panel-row-actions">
+            {annotation.status === "resolved" ? (
+              <button
+                className="annotations-panel-row-action"
+                type="button"
+                title="Reopen"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void setAnnotationStatus(annotation.id, "open");
+                }}
+              >
+                <RotateCcw aria-hidden="true" size={12} />
+              </button>
+            ) : (
+              <button
+                className="annotations-panel-row-action"
+                type="button"
+                title="Resolve"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void setAnnotationStatus(annotation.id, "resolved");
+                }}
+              >
+                <Check aria-hidden="true" size={12} />
+              </button>
+            )}
+            <button
+              className="annotations-panel-row-action annotations-panel-row-action-delete"
+              type="button"
+              title="Delete"
+              onClick={(event) => {
+                event.stopPropagation();
+                void deleteAnnotation(annotation.id);
+              }}
+            >
+              <Trash2 aria-hidden="true" size={12} />
+            </button>
+          </span>
+        </span>
       </div>
       <p className="annotations-panel-row-comment">{annotation.comment}</p>
-    </button>
+    </div>
   );
 }
 
