@@ -1,3 +1,4 @@
+import { AnnotationsPanel } from "./components/annotations/AnnotationsPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { DiffPanel } from "./components/DiffPanel";
 import { Sidebar } from "./components/Sidebar";
@@ -14,6 +15,7 @@ function App() {
       <main className="workspace">
         <Sidebar />
         <DiffPanel />
+        <AnnotationsPanel />
       </main>
       <CommandPalette />
     </div>
