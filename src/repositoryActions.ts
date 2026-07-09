@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { loadAnnotations } from "./annotationActions";
 import { appActions, appStore } from "./store";
 import type { RepositoryChanged, RepositoryDiff, TerminalInstallResult } from "./types";
 import { repositorySignature } from "./utils/repository";
@@ -24,6 +25,7 @@ export async function loadRepository(cwd?: string, options?: { silent?: boolean 
   try {
     const result = await invoke<RepositoryDiff>("load_repository", { cwd });
     applyRepository(result);
+    await loadAnnotations(result.repoRoot);
   } catch (loadError) {
     const message = String(loadError || "Could not load this repository.");
     if (!hasRepository) {

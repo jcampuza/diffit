@@ -1,6 +1,14 @@
 import { createStore, shallow, useSelector } from "@tanstack/react-store";
 import { getStoredViewMode, storeViewMode } from "./preferences";
-import type { DiffFile, RepositoryDiff } from "./types";
+import type { Annotation, AnnotationSide, AnnotationsState, DiffFile, RepositoryDiff } from "./types";
+
+export interface AnnotationDraft {
+  file: string;
+  oldFile?: string;
+  side: AnnotationSide;
+  startLine: number;
+  endLine: number;
+}
 
 export type ViewMode = "file" | "code";
 
@@ -19,6 +27,11 @@ export interface AppState {
   cliInstallState: "idle" | "installing" | "installed" | "error";
   cliInstallMessage: string | null;
   fileTreeFocusRequest: number;
+  annotations: Annotation[];
+  reviewPath: string | null;
+  annotationDraft: AnnotationDraft | null;
+  annotationsPanelOpen: boolean;
+  annotationJump: { file: string; side: AnnotationSide; line: number; nonce: number } | null;
 }
 
 const initialState: AppState = {
@@ -36,6 +49,11 @@ const initialState: AppState = {
   cliInstallState: "idle",
   cliInstallMessage: null,
   fileTreeFocusRequest: 0,
+  annotations: [],
+  reviewPath: null,
+  annotationDraft: null,
+  annotationsPanelOpen: false,
+  annotationJump: null,
 };
 
 export const appStore = createStore(initialState);
@@ -76,6 +94,9 @@ export const appActions = {
       ...state,
       repository: null,
       selectedPath: null,
+      annotations: [],
+      reviewPath: null,
+      annotationDraft: null,
       error,
     }));
   },
@@ -174,6 +195,47 @@ export const appActions = {
       ...state,
       cliInstallState,
       cliInstallMessage,
+    }));
+  },
+
+  setAnnotations({ annotations, reviewPath }: AnnotationsState) {
+    appStore.setState((state) => ({
+      ...state,
+      annotations,
+      reviewPath,
+    }));
+  },
+
+  setAnnotationDraft(annotationDraft: AnnotationDraft | null) {
+    appStore.setState((state) => ({
+      ...state,
+      annotationDraft,
+    }));
+  },
+
+  setAnnotationsPanelOpen(annotationsPanelOpen: boolean) {
+    appStore.setState((state) => ({
+      ...state,
+      annotationsPanelOpen,
+    }));
+  },
+
+  toggleAnnotationsPanel() {
+    appStore.setState((state) => ({
+      ...state,
+      annotationsPanelOpen: !state.annotationsPanelOpen,
+    }));
+  },
+
+  requestAnnotationJump(file: string, side: AnnotationSide, line: number) {
+    appStore.setState((state) => ({
+      ...state,
+      annotationJump: {
+        file,
+        side,
+        line,
+        nonce: (state.annotationJump?.nonce ?? 0) + 1,
+      },
     }));
   },
 };

@@ -1,3 +1,7 @@
+mod anchor;
+mod annotations;
+
+use annotations::ensure_diffit_dir;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use similar::{ChangeTag, TextDiff};
@@ -77,6 +81,14 @@ struct TerminalInstallResult {
     directory_in_path: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillInstallResult {
+    path: String,
+}
+
+const DIFFIT_REVIEW_SKILL: &str = include_str!("../skills/diffit-review/SKILL.md");
+
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum DiffStatus {
@@ -102,15 +114,22 @@ struct RepositoryWatcherState {
 
 struct RepositoryWatcher {
     repo_root: PathBuf,
-    _watcher: RecommendedWatcher,
-    stop_tx: mpsc::Sender<()>,
-    worker: Option<JoinHandle<()>>,
+    _repo_watcher: RecommendedWatcher,
+    _annotations_watcher: RecommendedWatcher,
+    repo_stop_tx: mpsc::Sender<()>,
+    annotations_stop_tx: mpsc::Sender<()>,
+    repo_worker: Option<JoinHandle<()>>,
+    annotations_worker: Option<JoinHandle<()>>,
 }
 
 impl Drop for RepositoryWatcher {
     fn drop(&mut self) {
-        let _ = self.stop_tx.send(());
-        if let Some(worker) = self.worker.take() {
+        let _ = self.repo_stop_tx.send(());
+        let _ = self.annotations_stop_tx.send(());
+        if let Some(worker) = self.repo_worker.take() {
+            let _ = worker.join();
+        }
+        if let Some(worker) = self.annotations_worker.take() {
             let _ = worker.join();
         }
     }
@@ -192,6 +211,22 @@ fn install_terminal_helper() -> Result<TerminalInstallResult, String> {
     })
 }
 
+#[tauri::command]
+fn install_agent_skill() -> Result<SkillInstallResult, String> {
+    let home = home_dir()?;
+    let skill_dir = home.join(".claude/skills/diffit-review");
+    fs::create_dir_all(&skill_dir)
+        .map_err(|error| format!("Could not create {}: {error}", skill_dir.display()))?;
+
+    let skill_path = skill_dir.join("SKILL.md");
+    fs::write(&skill_path, DIFFIT_REVIEW_SKILL)
+        .map_err(|error| format!("Could not write {}: {error}", skill_path.display()))?;
+
+    Ok(SkillInstallResult {
+        path: skill_path.to_string_lossy().into_owned(),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -216,8 +251,13 @@ pub fn run() {
         .manage(RepositoryWatcherState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            annotations::create_annotation,
+            annotations::delete_annotation,
+            annotations::load_annotations,
+            annotations::update_annotation,
+            install_agent_skill,
             install_terminal_helper,
-            load_repository
+            load_repository,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Diffit");
@@ -240,11 +280,86 @@ fn watch_repository(
         return Ok(());
     }
 
-    let (event_tx, event_rx) = mpsc::channel::<()>();
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let (repo_event_tx, repo_event_rx) = mpsc::channel::<()>();
+    let (annotations_event_tx, annotations_event_rx) = mpsc::channel::<()>();
+    let (repo_stop_tx, repo_stop_rx) = mpsc::channel::<()>();
+    let (annotations_stop_tx, annotations_stop_rx) = mpsc::channel::<()>();
     let cwd = repo_root.to_string_lossy().into_owned();
-    let debounce_app = app.clone();
-    let worker = thread::spawn(move || loop {
+    let repo_worker = spawn_debounced_emitter(
+        app.clone(),
+        repo_stop_rx,
+        repo_event_rx,
+        "repository-changed",
+        cwd.clone(),
+    );
+    let annotations_worker = spawn_debounced_emitter(
+        app.clone(),
+        annotations_stop_rx,
+        annotations_event_rx,
+        "annotations-changed",
+        cwd,
+    );
+
+    let repo_notify_tx = repo_event_tx.clone();
+    let watched_root = repo_root.to_path_buf();
+    let mut repo_watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        let Ok(event) = event else {
+            return;
+        };
+
+        if !should_emit_watch_event(&watched_root, &event.kind, &event.paths) {
+            return;
+        }
+
+        let _ = repo_notify_tx.send(());
+    })
+    .map_err(|error| format!("Could not start repository watcher: {error}"))?;
+
+    repo_watcher
+        .watch(repo_root, RecursiveMode::Recursive)
+        .map_err(|error| format!("Could not watch {}: {error}", repo_root.display()))?;
+
+    let diffit_dir = ensure_diffit_dir(repo_root)?;
+    let annotations_notify_tx = annotations_event_tx;
+    let mut annotations_watcher =
+        notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            let Ok(event) = event else {
+                return;
+            };
+
+            if !should_emit_annotations_watch_event(&event.kind, &event.paths) {
+                return;
+            }
+
+            let _ = annotations_notify_tx.send(());
+        })
+        .map_err(|error| format!("Could not start annotations watcher: {error}"))?;
+
+    annotations_watcher
+        .watch(&diffit_dir, RecursiveMode::NonRecursive)
+        .map_err(|error| format!("Could not watch {}: {error}", diffit_dir.display()))?;
+
+    *active_watcher = Some(RepositoryWatcher {
+        repo_root: repo_root.to_path_buf(),
+        _repo_watcher: repo_watcher,
+        _annotations_watcher: annotations_watcher,
+        repo_stop_tx,
+        annotations_stop_tx,
+        repo_worker: Some(repo_worker),
+        annotations_worker: Some(annotations_worker),
+    });
+
+    Ok(())
+}
+
+fn spawn_debounced_emitter(
+    app: AppHandle,
+    stop_rx: mpsc::Receiver<()>,
+    event_rx: mpsc::Receiver<()>,
+    event_name: &'static str,
+    cwd: String,
+) -> JoinHandle<()> {
+    thread::spawn(move || loop {
         if stop_rx.try_recv().is_ok() {
             break;
         }
@@ -261,42 +376,33 @@ fn watch_repository(
             match event_rx.recv_timeout(WATCHER_DEBOUNCE) {
                 Ok(()) => continue,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let _ = debounce_app
-                        .emit("repository-changed", RepositoryChanged { cwd: cwd.clone() });
+                    let _ = app.emit(
+                        event_name,
+                        RepositoryChanged {
+                            cwd: cwd.clone(),
+                        },
+                    );
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
-    });
-
-    let notify_tx = event_tx.clone();
-    let watched_root = repo_root.to_path_buf();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        let Ok(event) = event else {
-            return;
-        };
-
-        if !should_emit_watch_event(&watched_root, &event.kind, &event.paths) {
-            return;
-        }
-
-        let _ = notify_tx.send(());
     })
-    .map_err(|error| format!("Could not start repository watcher: {error}"))?;
+}
 
-    watcher
-        .watch(repo_root, RecursiveMode::Recursive)
-        .map_err(|error| format!("Could not watch {}: {error}", repo_root.display()))?;
+fn should_emit_annotations_watch_event(kind: &EventKind, paths: &[PathBuf]) -> bool {
+    if matches!(kind, EventKind::Access(_) | EventKind::Other) {
+        return false;
+    }
 
-    *active_watcher = Some(RepositoryWatcher {
-        repo_root: repo_root.to_path_buf(),
-        _watcher: watcher,
-        stop_tx,
-        worker: Some(worker),
-    });
+    if paths.is_empty() {
+        return true;
+    }
 
-    Ok(())
+    paths.iter().any(|path| {
+        path.file_name()
+            .is_some_and(|name| name == "review.json" || name == "review.json.tmp")
+    })
 }
 
 fn should_emit_watch_event(repo_root: &Path, kind: &EventKind, paths: &[PathBuf]) -> bool {
@@ -569,12 +675,12 @@ fn parse_status(bytes: &[u8]) -> Result<Vec<StatusEntry>, String> {
     Ok(entries)
 }
 
-fn git_text(cwd: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git_text(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let bytes = git_bytes(cwd, args)?;
     String::from_utf8(bytes).map_err(|error| format!("Git output was not UTF-8: {error}"))
 }
 
-fn git_bytes(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+pub(crate) fn git_bytes(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)

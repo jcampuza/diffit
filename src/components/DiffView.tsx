@@ -1,27 +1,37 @@
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
 import type { CodeViewItem } from "@pierre/diffs";
-import { Binary, FileCode2, Files } from "lucide-react";
+import { Binary, ClipboardCopy, FileCode2, Files, MessageSquareText } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { copyAgentPrompt } from "../annotationActions";
 import { CODE_VIEW_OPTIONS } from "../diffOptions";
-import type { ViewMode } from "../store";
+import { appActions, useShallowAppSelector, type ViewMode } from "../store";
 import type { DiffFile, RepositoryDiff } from "../types";
 import {
   buildCodeViewItems,
   CODE_VIEW_BATCH_COUNT,
   CODE_VIEW_INITIAL_BATCH,
-  findMatchRange,
+  diffSideFromAnnotationSide,
   getCodeViewItem,
   listRenderableFiles,
   pruneCodeViewItemCache,
   yieldToBrowser,
+  type AnnotationMeta,
   type FindMatch,
 } from "../utils/diff";
+import type { CodeViewOptions } from "@pierre/diffs";
+import { useAnnotationCodeView } from "./annotations/useAnnotationCodeView";
 import { ViewModeSwitch } from "./ViewModeSwitch";
 
-const FILE_CODE_VIEW_OPTIONS = {
+const ANNOTATION_CODE_VIEW_OPTIONS = {
   ...CODE_VIEW_OPTIONS,
+  enableGutterUtility: true,
+  enableLineSelection: true,
+} as CodeViewOptions<AnnotationMeta>;
+
+const FILE_CODE_VIEW_OPTIONS = {
+  ...ANNOTATION_CODE_VIEW_OPTIONS,
   disableFileHeader: true,
-};
+} as CodeViewOptions<AnnotationMeta>;
 
 interface DiffViewProps {
   activeFindMatch: FindMatch | null;
@@ -39,20 +49,17 @@ export function DiffView({ activeFindMatch, file, repository, viewMode }: DiffVi
 }
 
 function FileDiffView({ activeFindMatch, file, repository }: Omit<DiffViewProps, "viewMode">) {
-  const codeViewRef = useRef<CodeViewHandle<undefined>>(null);
-  const codeViewItems = useMemo(() => buildCodeViewItems(repository.files, file.path), [file.path, repository.files]);
+  const codeViewRef = useRef<CodeViewHandle<AnnotationMeta>>(null);
+  const baseItems = useMemo(() => buildCodeViewItems(repository.files, file.path), [file.path, repository.files]);
+  const annotationView = useAnnotationCodeView({
+    activeFindMatch,
+    baseItems,
+    files: repository.files,
+    findMatchFilePath: file.path,
+  });
   const seedKey = `${repository.repoRoot}:${file.path}`;
-  const remountKey = useUncontrolledCodeViewSync(codeViewRef, codeViewItems, seedKey);
-  const selectedLines = useMemo(() => {
-    if (!activeFindMatch || activeFindMatch.filePath !== file.path) {
-      return null;
-    }
-
-    return {
-      id: activeFindMatch.filePath,
-      range: findMatchRange(activeFindMatch),
-    };
-  }, [activeFindMatch, file.path]);
+  const remountKey = useUncontrolledCodeViewSync(codeViewRef, annotationView.items, seedKey);
+  const annotationJump = useShallowAppSelector((state) => state.annotationJump);
 
   useEffect(() => {
     if (!activeFindMatch) {
@@ -68,6 +75,21 @@ function FileDiffView({ activeFindMatch, file, repository }: Omit<DiffViewProps,
       behavior: "smooth-auto",
     });
   }, [activeFindMatch]);
+
+  useEffect(() => {
+    if (!annotationJump || annotationJump.file !== file.path) {
+      return;
+    }
+
+    codeViewRef.current?.scrollTo({
+      type: "line",
+      id: annotationJump.file,
+      lineNumber: annotationJump.line,
+      side: diffSideFromAnnotationSide(annotationJump.side),
+      align: "center",
+      behavior: "smooth-auto",
+    });
+  }, [annotationJump, file.path]);
 
   return (
     <DiffFrame
@@ -81,13 +103,16 @@ function FileDiffView({ activeFindMatch, file, repository }: Omit<DiffViewProps,
     >
       {file.binary ? (
         <BinaryFileState path={file.path} />
-      ) : codeViewItems.length > 0 ? (
-        <CodeView
+      ) : baseItems.length > 0 ? (
+        <CodeView<AnnotationMeta>
           key={`file:${seedKey}:${remountKey}`}
           ref={codeViewRef}
-          initialItems={codeViewItems}
+          initialItems={annotationView.items}
           options={FILE_CODE_VIEW_OPTIONS}
-          selectedLines={selectedLines}
+          renderAnnotation={annotationView.renderAnnotation}
+          renderGutterUtility={annotationView.renderGutterUtility}
+          selectedLines={annotationView.selectedLines}
+          onSelectedLinesChange={annotationView.onSelectedLinesChange}
           className="diff-renderer"
         />
       ) : (
@@ -98,28 +123,24 @@ function FileDiffView({ activeFindMatch, file, repository }: Omit<DiffViewProps,
 }
 
 function CodeDiffView({ activeFindMatch, file, repository }: Omit<DiffViewProps, "viewMode">) {
-  const codeViewRef = useRef<CodeViewHandle<undefined>>(null);
-  const codeViewItems = useBatchedCodeViewItems(repository.files);
-  const remountKey = useUncontrolledCodeViewSync(codeViewRef, codeViewItems, repository.repoRoot);
-  const selectedLines = useMemo(() => {
-    if (!activeFindMatch) {
-      return null;
-    }
+  const codeViewRef = useRef<CodeViewHandle<AnnotationMeta>>(null);
+  const baseItems = useBatchedCodeViewItems(repository.files);
+  const annotationView = useAnnotationCodeView({
+    activeFindMatch,
+    baseItems,
+    files: repository.files,
+  });
+  const remountKey = useUncontrolledCodeViewSync(codeViewRef, annotationView.items, repository.repoRoot);
+  const annotationJump = useShallowAppSelector((state) => state.annotationJump);
 
-    return {
-      id: activeFindMatch.filePath,
-      range: findMatchRange(activeFindMatch),
-    };
-  }, [activeFindMatch]);
-
-  useCodeModeFileScroll(codeViewRef, file.path, codeViewItems);
+  useCodeModeFileScroll(codeViewRef, file.path, baseItems);
 
   useEffect(() => {
     if (!activeFindMatch) {
       return;
     }
 
-    if (!codeViewItems.some((item) => item.id === activeFindMatch.filePath)) {
+    if (!baseItems.some((item) => item.id === activeFindMatch.filePath)) {
       return;
     }
 
@@ -131,7 +152,26 @@ function CodeDiffView({ activeFindMatch, file, repository }: Omit<DiffViewProps,
       align: "center",
       behavior: "smooth-auto",
     });
-  }, [activeFindMatch, codeViewItems]);
+  }, [activeFindMatch, baseItems]);
+
+  useEffect(() => {
+    if (!annotationJump) {
+      return;
+    }
+
+    if (!baseItems.some((item) => item.id === annotationJump.file)) {
+      return;
+    }
+
+    codeViewRef.current?.scrollTo({
+      type: "line",
+      id: annotationJump.file,
+      lineNumber: annotationJump.line,
+      side: diffSideFromAnnotationSide(annotationJump.side),
+      align: "center",
+      behavior: "smooth-auto",
+    });
+  }, [annotationJump, baseItems]);
 
   const totals = useMemo(() => {
     let additions = 0;
@@ -152,13 +192,16 @@ function CodeDiffView({ activeFindMatch, file, repository }: Omit<DiffViewProps,
       status={`${repository.files.length} files`}
       viewMode="code"
     >
-      {codeViewItems.length > 0 ? (
-        <CodeView
+      {baseItems.length > 0 ? (
+        <CodeView<AnnotationMeta>
           key={`code:${repository.repoRoot}:${remountKey}`}
           ref={codeViewRef}
-          initialItems={codeViewItems}
-          options={CODE_VIEW_OPTIONS}
-          selectedLines={selectedLines}
+          initialItems={annotationView.items}
+          options={ANNOTATION_CODE_VIEW_OPTIONS}
+          renderAnnotation={annotationView.renderAnnotation}
+          renderGutterUtility={annotationView.renderGutterUtility}
+          selectedLines={annotationView.selectedLines}
+          onSelectedLinesChange={annotationView.onSelectedLinesChange}
           className="diff-renderer"
         />
       ) : (
@@ -228,7 +271,7 @@ function useBatchedCodeViewItems(files: readonly DiffFile[]) {
 }
 
 function useCodeModeFileScroll(
-  codeViewRef: React.RefObject<CodeViewHandle<undefined> | null>,
+  codeViewRef: React.RefObject<CodeViewHandle<AnnotationMeta> | null>,
   filePath: string,
   codeViewItems: readonly CodeViewItem<undefined>[],
 ) {
@@ -268,11 +311,11 @@ function useCodeModeFileScroll(
  * Remounts only when items are removed (CodeView has no remove API).
  */
 function useUncontrolledCodeViewSync(
-  codeViewRef: React.RefObject<CodeViewHandle<undefined> | null>,
-  items: readonly CodeViewItem<undefined>[],
+  codeViewRef: React.RefObject<CodeViewHandle<AnnotationMeta> | null>,
+  items: readonly CodeViewItem<AnnotationMeta>[],
   seedKey: string,
 ) {
-  const previousItemsRef = useRef<readonly CodeViewItem<undefined>[] | null>(null);
+  const previousItemsRef = useRef<readonly CodeViewItem<AnnotationMeta>[] | null>(null);
   const previousSeedKeyRef = useRef(seedKey);
   const [remountKey, setRemountKey] = useState(0);
 
@@ -303,7 +346,7 @@ function useUncontrolledCodeViewSync(
     }
 
     const previousById = new Map(previousItems.map((item) => [item.id, item]));
-    const added: CodeViewItem<undefined>[] = [];
+    const added: CodeViewItem<AnnotationMeta>[] = [];
 
     for (const item of items) {
       const previous = previousById.get(item.id);
@@ -348,6 +391,8 @@ function DiffFrame({ additions, children, deletions, heading, icon, status, subh
           {subheading ? <span>{subheading}</span> : null}
         </div>
         <div className="diff-toolbar-actions">
+          <AgentPromptButton />
+          <AnnotationsPanelToggleButton />
           <ViewModeSwitch value={viewMode} />
           <div className="change-counts" aria-label="Line changes">
             <span className="additions">+{additions}</span>
@@ -358,6 +403,59 @@ function DiffFrame({ additions, children, deletions, heading, icon, status, subh
       </div>
       {children}
     </div>
+  );
+}
+
+function AgentPromptButton() {
+  const openCount = useShallowAppSelector(
+    (state) => state.annotations.filter((annotation) => annotation.status === "open").length,
+  );
+  const [copied, setCopied] = useState(false);
+
+  if (openCount === 0) {
+    return null;
+  }
+
+  return (
+    <button
+      className="agent-prompt-button"
+      type="button"
+      title="Copy prompt for agent"
+      onClick={() => {
+        void copyAgentPrompt().then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 2000);
+        });
+      }}
+    >
+      <ClipboardCopy aria-hidden="true" size={14} />
+      <span>{copied ? "Copied" : `${openCount} open`}</span>
+    </button>
+  );
+}
+
+function AnnotationsPanelToggleButton() {
+  const { annotationCount, openCount, panelOpen } = useShallowAppSelector((state) => ({
+    annotationCount: state.annotations.length,
+    openCount: state.annotations.filter((annotation) => annotation.status === "open").length,
+    panelOpen: state.annotationsPanelOpen,
+  }));
+
+  if (annotationCount === 0 && !panelOpen) {
+    return null;
+  }
+
+  return (
+    <button
+      className="icon-button annotations-panel-toggle"
+      type="button"
+      aria-pressed={panelOpen}
+      title={panelOpen ? "Close comments panel" : "Open comments panel"}
+      onClick={() => appActions.toggleAnnotationsPanel()}
+    >
+      <MessageSquareText aria-hidden="true" size={15} />
+      {openCount > 0 ? <span className="annotations-panel-toggle-count">{openCount}</span> : null}
+    </button>
   );
 }
 

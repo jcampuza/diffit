@@ -1,14 +1,17 @@
 import { Command } from "cmdk";
-import { Search } from "lucide-react";
+import { ClipboardCopy, MessageSquareText, Search, Sparkles } from "lucide-react";
+import { copyAgentPrompt, installAgentSkill } from "../annotationActions";
 import { appActions, useShallowAppSelector } from "../store";
 import type { DiffFile } from "../types";
 import { basename } from "../utils/path";
 
 export function CommandPalette() {
-  const { files, open } = useShallowAppSelector((state) => ({
+  const { annotations, files, open } = useShallowAppSelector((state) => ({
+    annotations: state.annotations,
     files: state.repository?.files ?? [],
     open: state.commandOpen,
   }));
+  const hasOpenAnnotations = annotations.some((annotation) => annotation.status === "open");
 
   return (
     <Command.Dialog
@@ -25,6 +28,43 @@ export function CommandPalette() {
       </div>
       <Command.List>
         <Command.Empty>No changed files found.</Command.Empty>
+        <Command.Group heading="Actions">
+          {hasOpenAnnotations ? (
+            <Command.Item
+              value="copy agent prompt"
+              keywords={["agent", "prompt", "review", "comments", "clipboard"]}
+              onSelect={() => {
+                void copyAgentPrompt();
+                appActions.setCommandOpen(false);
+              }}
+            >
+              <ClipboardCopy aria-hidden="true" size={15} />
+              <span>Copy agent prompt</span>
+            </Command.Item>
+          ) : null}
+          <Command.Item
+            value="toggle comments panel"
+            keywords={["annotations", "comments", "review", "panel"]}
+            onSelect={() => {
+              appActions.toggleAnnotationsPanel();
+              appActions.setCommandOpen(false);
+            }}
+          >
+            <MessageSquareText aria-hidden="true" size={15} />
+            <span>Toggle comments panel</span>
+          </Command.Item>
+          <Command.Item
+            value="install claude code skill"
+            keywords={["agent", "skill", "claude", "install"]}
+            onSelect={() => {
+              void installAgentSkill();
+              appActions.setCommandOpen(false);
+            }}
+          >
+            <Sparkles aria-hidden="true" size={15} />
+            <span>Install Claude Code skill</span>
+          </Command.Item>
+        </Command.Group>
         <Command.Group heading="Changed files">
           {files.map((file) => (
             <CommandFileItem key={file.path} file={file} />

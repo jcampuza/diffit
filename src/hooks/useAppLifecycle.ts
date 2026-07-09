@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
+import { listenForAnnotationChanges } from "../annotationActions";
 import { listenForRepositoryChanges, loadRepository } from "../repositoryActions";
 import { appActions, appStore } from "../store";
 
 export function useAppLifecycle() {
   useInitialRepositoryLoad();
   useRepositoryChangeListener();
+  useAnnotationsChangeListener();
   useWindowFocusRefresh();
   useGlobalShortcuts();
 }
@@ -18,6 +20,16 @@ function useInitialRepositoryLoad() {
 function useRepositoryChangeListener() {
   useEffect(() => {
     const unlistenPromise = listenForRepositoryChanges();
+
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+}
+
+function useAnnotationsChangeListener() {
+  useEffect(() => {
+    const unlistenPromise = listenForAnnotationChanges();
 
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());

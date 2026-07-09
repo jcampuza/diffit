@@ -1,7 +1,9 @@
-import { parseDiffFromFile, type CodeViewItem, type SelectedLineRange } from "@pierre/diffs";
+import { parseDiffFromFile, type CodeViewItem, type DiffLineAnnotation, type LineAnnotation, type SelectedLineRange } from "@pierre/diffs";
 import { DIFF_OPTIONS } from "../diffOptions";
-import type { DiffFile } from "../types";
-import type { ViewMode } from "../store";
+import type { Annotation, AnnotationSide, DiffFile } from "../types";
+import type { AnnotationDraft, ViewMode } from "../store";
+
+export type AnnotationMeta = { annotation: Annotation } | { draft: true };
 
 export interface FindMatch {
   filePath: string;
@@ -14,6 +16,118 @@ const ITEM_CACHE_LIMIT = 256;
 
 export const CODE_VIEW_INITIAL_BATCH = 12;
 export const CODE_VIEW_BATCH_COUNT = 25;
+
+export function annotationSideFromDiffSide(side: "deletions" | "additions"): AnnotationSide {
+  return side === "deletions" ? "old" : "new";
+}
+
+export function diffSideFromAnnotationSide(side: AnnotationSide): "deletions" | "additions" {
+  return side === "old" ? "deletions" : "additions";
+}
+
+export function attachAnnotationsToCodeViewItem(
+  base: CodeViewItem<undefined>,
+  file: DiffFile,
+  annotations: readonly Annotation[],
+  draft: AnnotationDraft | null,
+): CodeViewItem<AnnotationMeta> {
+  const fileAnnotations = annotations.filter((annotation) => annotation.file === file.path);
+  const fileDraft = draft?.file === file.path ? draft : null;
+  const version = annotationItemVersion(base.version, fileAnnotations, fileDraft);
+
+  if (base.type === "file") {
+    const codeAnnotations = buildFileAnnotations(fileAnnotations, fileDraft);
+    return {
+      ...base,
+      version,
+      annotations: codeAnnotations.length > 0 ? codeAnnotations : undefined,
+    };
+  }
+
+  const codeAnnotations = buildDiffAnnotations(fileAnnotations, fileDraft);
+  return {
+    ...base,
+    version,
+    annotations: codeAnnotations.length > 0 ? codeAnnotations : undefined,
+  };
+}
+
+export function attachAnnotationsToItems(
+  items: readonly CodeViewItem<undefined>[],
+  filesByPath: ReadonlyMap<string, DiffFile>,
+  annotations: readonly Annotation[],
+  draft: AnnotationDraft | null,
+): CodeViewItem<AnnotationMeta>[] {
+  return items.map((item) => {
+    const file = filesByPath.get(item.id);
+    if (!file) {
+      return item as CodeViewItem<AnnotationMeta>;
+    }
+
+    return attachAnnotationsToCodeViewItem(item, file, annotations, draft);
+  });
+}
+
+function buildFileAnnotations(
+  annotations: readonly Annotation[],
+  draft: AnnotationDraft | null,
+): LineAnnotation<AnnotationMeta>[] {
+  const entries: LineAnnotation<AnnotationMeta>[] = [];
+
+  for (const annotation of annotations) {
+    if (annotation.side === "old") {
+      continue;
+    }
+
+    entries.push({
+      lineNumber: annotation.endLine,
+      metadata: { annotation },
+    });
+  }
+
+  if (draft) {
+    entries.push({
+      lineNumber: draft.endLine,
+      metadata: { draft: true },
+    });
+  }
+
+  return entries;
+}
+
+function buildDiffAnnotations(
+  annotations: readonly Annotation[],
+  draft: AnnotationDraft | null,
+): DiffLineAnnotation<AnnotationMeta>[] {
+  const entries: DiffLineAnnotation<AnnotationMeta>[] = [];
+
+  for (const annotation of annotations) {
+    entries.push({
+      side: diffSideFromAnnotationSide(annotation.side),
+      lineNumber: annotation.endLine,
+      metadata: { annotation },
+    });
+  }
+
+  if (draft) {
+    entries.push({
+      side: diffSideFromAnnotationSide(draft.side),
+      lineNumber: draft.endLine,
+      metadata: { draft: true },
+    });
+  }
+
+  return entries;
+}
+
+function annotationItemVersion(
+  baseVersion: number | undefined,
+  annotations: readonly Annotation[],
+  draft: AnnotationDraft | null,
+): number {
+  const suffix = hashString(JSON.stringify({ annotations, draft }));
+  return ((baseVersion ?? 0) >>> 0) ^ suffix;
+}
 
 export function getCodeViewItem(file: DiffFile): CodeViewItem<undefined> | null {
   if (file.binary) {
