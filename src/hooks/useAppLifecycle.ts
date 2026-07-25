@@ -94,6 +94,11 @@ function useGlobalShortcuts() {
         appActions.requestFileTreeFocus();
         return;
       }
+      if (key === "b") {
+        event.preventDefault();
+        appActions.toggleSidebar();
+        return;
+      }
       if (key === "f") {
         event.preventDefault();
         appActions.setFindOpen(true);

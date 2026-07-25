@@ -88,7 +88,9 @@ export function CommitPicker() {
           <>
             <GitCommitHorizontal aria-hidden="true" size={14} />
             <span className="commit-picker-sha">{revision.shortSha}</span>
-            <span className="commit-picker-trigger-label">{revision.subject}</span>
+            <span className="commit-picker-trigger-label" title={revision.subject}>
+              {revision.subject}
+            </span>
           </>
         ) : (
           <>

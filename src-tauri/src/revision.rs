@@ -56,7 +56,8 @@ impl CommitContext {
 /// Returns the most recent commits reachable from `HEAD`.
 ///
 /// A repository with no commits yet yields an empty list rather than an error.
-#[tauri::command]
+/// Runs off the UI thread, like [`crate::load_repository`]: it shells out to git.
+#[tauri::command(async)]
 pub(crate) fn list_commits(cwd: String, limit: Option<usize>) -> Result<Vec<CommitSummary>, String> {
     let repo_root = resolve_repo_root(Path::new(&cwd))?;
     let limit = limit.unwrap_or(DEFAULT_COMMIT_LIMIT);

@@ -1,5 +1,14 @@
 import { createStore, shallow, useSelector } from "@tanstack/react-store";
-import { getStoredViewMode, storeViewMode } from "./preferences";
+import {
+  clampSidebarWidth,
+  getStoredSidebarCollapsed,
+  getStoredSidebarWidth,
+  getStoredViewMode,
+  SIDEBAR_DEFAULT_WIDTH,
+  storeSidebarCollapsed,
+  storeSidebarWidth,
+  storeViewMode,
+} from "./preferences";
 import type {
   Annotation,
   AnnotationSide,
@@ -30,6 +39,8 @@ export interface AppState {
   commitsError: string | null;
   commitsComplete: boolean;
   viewMode: ViewMode;
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
   findOpen: boolean;
   findQuery: string;
   activeFindIndex: number;
@@ -57,6 +68,8 @@ const initialState: AppState = {
   commitsError: null,
   commitsComplete: false,
   viewMode: getStoredViewMode() ?? "file",
+  sidebarWidth: getStoredSidebarWidth() ?? SIDEBAR_DEFAULT_WIDTH,
+  sidebarCollapsed: getStoredSidebarCollapsed() ?? false,
   findOpen: false,
   findQuery: "",
   activeFindIndex: 0,
@@ -177,6 +190,32 @@ export const appActions = {
       ...state,
       viewMode,
       activeFindIndex: 0,
+    }));
+  },
+
+  setSidebarWidth(width: number) {
+    const sidebarWidth = clampSidebarWidth(width);
+    storeSidebarWidth(sidebarWidth);
+    appStore.setState((state) => ({
+      ...state,
+      sidebarWidth,
+    }));
+  },
+
+  setSidebarCollapsed(sidebarCollapsed: boolean) {
+    storeSidebarCollapsed(sidebarCollapsed);
+    appStore.setState((state) => ({
+      ...state,
+      sidebarCollapsed,
+    }));
+  },
+
+  toggleSidebar() {
+    const sidebarCollapsed = !appStore.state.sidebarCollapsed;
+    storeSidebarCollapsed(sidebarCollapsed);
+    appStore.setState((state) => ({
+      ...state,
+      sidebarCollapsed,
     }));
   },
 

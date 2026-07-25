@@ -11,9 +11,10 @@ use similar::{ChangeTag, TextDiff};
 use std::{
     cmp::Ordering,
     collections::HashMap,
-    env, fs, io,
+    env, fs,
+    io::{self, Write},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{mpsc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
@@ -205,7 +206,10 @@ impl Drop for RepositoryWatcher {
     }
 }
 
-#[tauri::command]
+/// Runs off the UI thread: a synchronous command body executes on the thread that
+/// received the IPC message, which on macOS is the thread AppKit drives the windows
+/// from, so a large diff would stall window switching until the load finished.
+#[tauri::command(async)]
 fn load_repository(
     app: AppHandle,
     window: tauri::Window,
@@ -244,10 +248,7 @@ fn load_repository(
         }
     };
 
-    let mut files = entries
-        .into_iter()
-        .filter_map(|entry| read_diff_file(&repo_root, &sources, entry).transpose())
-        .collect::<Result<Vec<_>, String>>()?;
+    let mut files = read_diff_files(&repo_root, &sources, entries);
 
     files.sort_by(|left, right| compare_tree_paths(&left.path, &right.path));
 
@@ -752,24 +753,48 @@ fn current_branch(repo_root: &Path) -> Result<String, String> {
     ))
 }
 
-fn read_diff_file(
+/// Builds the diff for every changed file, reading all blobs in one batch.
+fn read_diff_files(
     repo_root: &Path,
     sources: &DiffSources,
-    entry: StatusEntry,
-) -> Result<Option<DiffFile>, String> {
-    let status = classify_status(&entry);
-    let old_path = entry.old_path.as_deref().unwrap_or(&entry.path);
-    let old_bytes = match status {
-        DiffStatus::Added | DiffStatus::Untracked => Vec::new(),
-        _ => read_side(repo_root, &sources.old, old_path),
-    };
-    let new_bytes = match status {
-        DiffStatus::Deleted => Vec::new(),
-        _ => read_side(repo_root, &sources.new, &entry.path),
-    };
+    entries: Vec<StatusEntry>,
+) -> Vec<DiffFile> {
+    let statuses = entries.iter().map(classify_status).collect::<Vec<_>>();
 
-    let old_text = text_from_bytes(&old_bytes);
-    let new_text = text_from_bytes(&new_bytes);
+    let mut requests = Vec::with_capacity(entries.len() * 2);
+    for (entry, status) in entries.iter().zip(&statuses) {
+        let old_path = entry.old_path.as_deref().unwrap_or(&entry.path);
+        requests.push(match status {
+            DiffStatus::Added | DiffStatus::Untracked => SideRequest::Empty,
+            _ => SideRequest::for_side(&sources.old, old_path),
+        });
+        requests.push(match status {
+            DiffStatus::Deleted => SideRequest::Empty,
+            _ => SideRequest::for_side(&sources.new, &entry.path),
+        });
+    }
+
+    let mut sides = read_sides(repo_root, &requests).into_iter();
+
+    entries
+        .into_iter()
+        .zip(statuses)
+        .filter_map(|(entry, status)| {
+            let old_bytes = sides.next().unwrap_or_default();
+            let new_bytes = sides.next().unwrap_or_default();
+            build_diff_file(entry, status, &old_bytes, &new_bytes)
+        })
+        .collect()
+}
+
+fn build_diff_file(
+    entry: StatusEntry,
+    status: DiffStatus,
+    old_bytes: &[u8],
+    new_bytes: &[u8],
+) -> Option<DiffFile> {
+    let old_text = text_from_bytes(old_bytes);
+    let new_text = text_from_bytes(new_bytes);
     let binary = old_text.is_none() || new_text.is_none();
     let (old_content, new_content) = match (old_text, new_text) {
         (Some(old_content), Some(new_content)) => (old_content, new_content),
@@ -777,12 +802,12 @@ fn read_diff_file(
     };
 
     if old_content == new_content && !matches!(status, DiffStatus::Renamed) {
-        return Ok(None);
+        return None;
     }
 
     let (additions, deletions) = count_changes(&old_content, &new_content);
 
-    Ok(Some(DiffFile {
+    Some(DiffFile {
         path: entry.path,
         old_path: entry.old_path,
         status,
@@ -791,18 +816,150 @@ fn read_diff_file(
         binary,
         additions,
         deletions,
-    }))
+    })
 }
 
-/// Reads one side of a diff. A missing blob or file reads as empty, as it does for
-/// files git cannot show.
-fn read_side(repo_root: &Path, source: &ContentSource, path: &str) -> Vec<u8> {
-    match source {
-        ContentSource::Blob(rev) => {
-            git_bytes(repo_root, &["show", &format!("{rev}:{path}")]).unwrap_or_default()
+/// One side of one file, before its content has been read.
+enum SideRequest {
+    /// The file does not exist on this side.
+    Empty,
+    /// A `<rev>:<path>` object spec.
+    Blob(String),
+    /// A path relative to the repository root.
+    WorkTree(String),
+}
+
+impl SideRequest {
+    fn for_side(source: &ContentSource, path: &str) -> Self {
+        match source {
+            ContentSource::Blob(rev) => Self::Blob(format!("{rev}:{path}")),
+            ContentSource::WorkTree => Self::WorkTree(path.to_string()),
         }
-        ContentSource::WorkTree => fs::read(repo_root.join(path)).unwrap_or_default(),
     }
+}
+
+/// Resolves every side of every file. A missing blob or file reads as empty, as it does
+/// for files git cannot show.
+fn read_sides(repo_root: &Path, requests: &[SideRequest]) -> Vec<Vec<u8>> {
+    let specs = requests
+        .iter()
+        .filter_map(|request| match request {
+            SideRequest::Blob(spec) => Some(spec.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut blobs = read_blobs(repo_root, &specs).into_iter();
+
+    requests
+        .iter()
+        .map(|request| match request {
+            SideRequest::Empty => Vec::new(),
+            SideRequest::Blob(_) => blobs.next().unwrap_or_default(),
+            SideRequest::WorkTree(path) => fs::read(repo_root.join(path)).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Reads every object in a single `git cat-file --batch`.
+///
+/// Starting a `git show` per file costs milliseconds of process start-up each, which
+/// dominates the load of a repository with many changed files. Batch input is newline
+/// separated, so a path containing a newline falls back to one `git show` per object,
+/// as does any batch git could not complete.
+fn read_blobs(repo_root: &Path, specs: &[&str]) -> Vec<Vec<u8>> {
+    if specs.is_empty() {
+        return Vec::new();
+    }
+
+    if !specs.iter().any(|spec| spec.contains(['\n', '\r'])) {
+        if let Ok(blobs) = batch_read_blobs(repo_root, specs) {
+            if blobs.len() == specs.len() {
+                return blobs;
+            }
+        }
+    }
+
+    specs
+        .iter()
+        .map(|spec| git_bytes(repo_root, &["show", spec]).unwrap_or_default())
+        .collect()
+}
+
+fn batch_read_blobs(repo_root: &Path, specs: &[&str]) -> Result<Vec<Vec<u8>>, String> {
+    let mut child = Command::new("git")
+        .args(["cat-file", "--batch"])
+        .current_dir(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Could not run git: {error}"))?;
+
+    let mut input = String::new();
+    for spec in specs {
+        input.push_str(spec);
+        input.push('\n');
+    }
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Could not write to git.".to_string())?;
+    // git stops reading once its own output pipe fills, so the write has to overlap the read.
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("Could not run git: {error}"))?;
+    let _ = writer.join();
+
+    if !output.status.success() {
+        return Err("Could not read the repository contents.".to_string());
+    }
+
+    parse_cat_file_batch(&output.stdout, specs.len())
+}
+
+/// Parses `git cat-file --batch` output.
+///
+/// Each request answers with either `<oid> <type> <size>` followed by that many bytes and
+/// a newline, or a header without a size (`missing`, `ambiguous`) and no content at all.
+fn parse_cat_file_batch(bytes: &[u8], expected: usize) -> Result<Vec<Vec<u8>>, String> {
+    let mut blobs = Vec::with_capacity(expected);
+    let mut index = 0;
+
+    while blobs.len() < expected {
+        let Some(rest) = bytes.get(index..) else {
+            return Err("Git object output ended early.".to_string());
+        };
+        let Some(newline) = rest.iter().position(|byte| *byte == b'\n') else {
+            return Err("Git object output ended early.".to_string());
+        };
+        let header = String::from_utf8_lossy(&rest[..newline]);
+        index += newline + 1;
+
+        let Some(size) = header
+            .rsplit(' ')
+            .next()
+            .and_then(|size| size.parse::<usize>().ok())
+        else {
+            blobs.push(Vec::new());
+            continue;
+        };
+
+        if index + size > bytes.len() {
+            return Err("Git object output was truncated.".to_string());
+        }
+
+        blobs.push(bytes[index..index + size].to_vec());
+        // Skip the content and the newline git writes after it.
+        index += size + 1;
+    }
+
+    Ok(blobs)
 }
 
 pub(crate) fn classify_status(entry: &StatusEntry) -> DiffStatus {
@@ -907,9 +1064,55 @@ pub(crate) fn git_bytes(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_tree_paths, is_ignored_watch_path, should_emit_watch_event};
+    use super::{
+        compare_tree_paths, is_ignored_watch_path, parse_cat_file_batch, should_emit_watch_event,
+    };
     use notify::EventKind;
     use std::path::PathBuf;
+
+    #[test]
+    fn cat_file_batch_reads_content_by_its_declared_size() {
+        let raw = b"1111111 blob 6\nhello\n\n2222222 blob 3\na\nb\n";
+        let blobs = parse_cat_file_batch(raw, 2).expect("parsing should succeed");
+
+        assert_eq!(blobs.len(), 2);
+        assert_eq!(blobs[0], b"hello\n");
+        assert_eq!(blobs[1], b"a\nb");
+    }
+
+    #[test]
+    fn cat_file_batch_reads_missing_objects_as_empty() {
+        let raw = b"HEAD:gone.txt missing\n3333333 blob 2\nhi\n";
+        let blobs = parse_cat_file_batch(raw, 2).expect("parsing should succeed");
+
+        assert!(blobs[0].is_empty());
+        assert_eq!(blobs[1], b"hi");
+    }
+
+    #[test]
+    fn cat_file_batch_reads_an_empty_object() {
+        let raw = b"4444444 blob 0\n\n";
+        let blobs = parse_cat_file_batch(raw, 1).expect("parsing should succeed");
+
+        assert_eq!(blobs.len(), 1);
+        assert!(blobs[0].is_empty());
+    }
+
+    #[test]
+    fn cat_file_batch_stops_at_the_requested_count() {
+        let raw = b"5555555 blob 1\nx\n6666666 blob 1\ny\n";
+        assert_eq!(
+            parse_cat_file_batch(raw, 1).expect("parsing should succeed"),
+            vec![b"x".to_vec()],
+        );
+    }
+
+    #[test]
+    fn cat_file_batch_rejects_short_and_truncated_output() {
+        assert!(parse_cat_file_batch(b"", 1).is_err());
+        assert!(parse_cat_file_batch(b"7777777 blob 1\nx\n", 2).is_err());
+        assert!(parse_cat_file_batch(b"8888888 blob 40\nshort\n", 1).is_err());
+    }
 
     #[test]
     fn tree_path_order_puts_nested_directory_files_before_sibling_files() {
