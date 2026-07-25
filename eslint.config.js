@@ -6,7 +6,9 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist", "src-tauri/gen", "src-tauri/target", ".references"],
+    // `.claude` holds agent worktrees: whole checkouts of this repository, which
+    // eslint would otherwise lint a second time through their copy of `bin`.
+    ignores: ["dist", "src-tauri/gen", "src-tauri/target", ".references", ".claude"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

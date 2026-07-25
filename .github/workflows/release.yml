@@ -4,6 +4,16 @@ on:
   push:
     branches:
       - main
+    # A push that touches nothing but these cannot change the built app, so it does
+    # not get a release. GitHub skips the run only when every changed file matches,
+    # so a commit touching both a source file and a document still releases.
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".claude/**"
+      - LICENSE
+  # Releases whatever is on main right now, for a build worth publishing that the
+  # rules above skipped.
   workflow_dispatch:
 
 concurrency:
