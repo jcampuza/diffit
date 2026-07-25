@@ -85,6 +85,13 @@ pub(crate) async fn check_for_update(
     state: State<'_, UpdateState>,
     force: bool,
 ) -> Result<UpdateStatus, String> {
+    // A development build carries the placeholder version from tauri.conf.json, which is
+    // below every published release, so it would otherwise offer to replace itself with
+    // the last release on every `tauri dev`.
+    if tauri::is_dev() {
+        return Ok(UpdateStatus::UpToDate);
+    }
+
     {
         let mut inner = state.lock()?;
         if inner.busy || (!force && inner.checked) {
