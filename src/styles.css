@@ -807,45 +807,6 @@ body.sidebar-resizing .sidebar-resize-handle::after {
   background: #77a6df;
 }
 
-@media (max-width: 760px) {
-  .repo-meta,
-  .refresh-indicator {
-    display: none;
-  }
-
-  .commit-picker-trigger {
-    max-width: 160px;
-  }
-
-  .commit-picker-popover {
-    width: min(420px, calc(100vw - 24px));
-  }
-
-  .diff-toolbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .diff-view {
-    grid-template-rows: 82px minmax(0, 1fr);
-  }
-
-  .diff-toolbar-actions {
-    width: 100%;
-    justify-content: space-between;
-  }
-
-  .view-mode-switch button {
-    min-width: 58px;
-  }
-
-  .find-bar {
-    top: 54px;
-    right: 8px;
-    width: calc(100% - 16px);
-  }
-}
-
 .annotation-gutter-button {
   position: relative;
   display: flex;
