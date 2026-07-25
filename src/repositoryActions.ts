@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { loadAnnotations } from "./annotationActions";
 import { appActions, appStore } from "./store";
 import type { CommitSummary, RepositoryChanged, RepositoryDiff, TerminalInstallResult } from "./types";
+import { listenToThisWindow } from "./utils/events";
 import { repositorySignature } from "./utils/repository";
 
 const COMMIT_PAGE_SIZE = 50;
@@ -137,7 +137,7 @@ export async function installCli() {
 }
 
 export async function listenForRepositoryChanges() {
-  return listen<RepositoryChanged>("repository-changed", (event) => {
+  return listenToThisWindow<RepositoryChanged>("repository-changed", (event) => {
     // Background FS updates should not flash the header "Refreshing" indicator.
     void loadRepository(event.payload.cwd, { silent: true });
   });
@@ -147,7 +147,7 @@ export async function listenForRepositoryChanges() {
 // the working-tree diff, so it leaves any selected commit behind and shows the
 // refresh rather than moving the view silently.
 export async function listenForRepositoryOpened() {
-  return listen<RepositoryChanged>("repository-opened", (event) => {
+  return listenToThisWindow<RepositoryChanged>("repository-opened", (event) => {
     void loadRepository(event.payload.cwd, { silent: false, revision: null });
   });
 }

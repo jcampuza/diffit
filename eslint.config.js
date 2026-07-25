@@ -53,4 +53,25 @@ export default tseslint.config(
     files: ["src/**/*.{ts,tsx}"],
     ...reactHooks.configs.flat["recommended-latest"],
   },
+  {
+    // A bare `listen` registers for the `Any` target, which Tauri delivers to
+    // regardless of the window an event was emitted to. Every window would then
+    // react to every repository.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/utils/events.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@tauri-apps/api/event",
+              importNames: ["listen", "once"],
+              message: "Use listenToThisWindow from src/utils/events.ts so the listener is scoped to this window.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 );
