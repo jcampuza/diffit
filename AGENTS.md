@@ -29,3 +29,11 @@ an update and have to be replaced by hand.
 
 Releases must not be marked as prereleases: the updater reads
 `releases/latest/download/latest.json`, which GitHub only resolves to a full release.
+
+### Not releasing
+
+A push that changes only documents, `.gitignore` or `.claude` is skipped by the
+workflow's `paths-ignore`. Anything else can be skipped by putting `[skip ci]` in the
+merge commit subject, which GitHub honours before the workflow starts. Neither is
+reversible after the fact: to release a build that was skipped, run the workflow by
+hand from the Actions tab.
