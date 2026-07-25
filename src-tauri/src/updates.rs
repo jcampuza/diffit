@@ -106,7 +106,7 @@ pub(crate) async fn check_for_update(
     let updater = match app.updater() {
         Ok(updater) => updater,
         Err(error) => {
-            return state.finish(&app, failed("Could not start the updater", error));
+            return state.finish(&app, check_failed(force, "Could not start the updater", error));
         }
     };
 
@@ -119,8 +119,22 @@ pub(crate) async fn check_for_update(
             },
         ),
         Ok(None) => state.finish(&app, UpdateStatus::UpToDate),
-        Err(error) => state.finish(&app, failed("Could not check for updates", error)),
+        Err(error) => state.finish(&app, check_failed(force, "Could not check for updates", error)),
     }
+}
+
+/// A check the user asked for reports why it failed; the one on launch stays quiet.
+///
+/// The launch check fails for reasons that are none of the user's business and that they
+/// cannot act on — a laptop that is offline, GitHub being unreachable, or no release
+/// having been published yet — and a banner about it on every launch would be noise.
+fn check_failed(force: bool, context: &str, error: impl std::fmt::Display) -> UpdateStatus {
+    if force {
+        return failed(context, error);
+    }
+
+    eprintln!("{context}: {error}");
+    UpdateStatus::Idle
 }
 
 /// Downloads and installs the newest release, then restarts into it.
