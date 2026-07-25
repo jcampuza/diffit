@@ -31,7 +31,7 @@ export async function installAgentSkill() {
   }
 }
 
-export async function loadAnnotations(cwd?: string) {
+export async function loadAnnotations(cwd?: string, options?: { shouldApply?: () => boolean }) {
   const resolvedCwd = cwd ?? appStore.state.repository?.repoRoot;
   if (!resolvedCwd) {
     return;
@@ -39,6 +39,10 @@ export async function loadAnnotations(cwd?: string) {
 
   try {
     const state = await invoke<AnnotationsState>("load_annotations", { cwd: resolvedCwd });
+    if (options?.shouldApply && !options.shouldApply()) {
+      return;
+    }
+
     appActions.setAnnotations(state);
   } catch (loadError) {
     console.error("Could not load annotations:", loadError);

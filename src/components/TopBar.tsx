@@ -1,16 +1,18 @@
-import { Check, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Terminal } from "lucide-react";
-import { installCli, loadRepository, openRepositoryFolder } from "../repositoryActions";
+import { Check, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Terminal, X } from "lucide-react";
+import { installCli, loadRepository, openRepositoryFolder, selectRevision } from "../repositoryActions";
 import { appStore, useShallowAppSelector } from "../store";
 import { basename } from "../utils/path";
+import { CommitPicker } from "./CommitPicker";
 
 export function TopBar() {
-  const { branch, cliInstallState, filesCount, head, isRefreshing, repoRoot } = useShallowAppSelector((state) => ({
+  const { branch, cliInstallState, filesCount, head, isRefreshing, repoRoot, revision } = useShallowAppSelector((state) => ({
     branch: state.repository?.branch ?? null,
     cliInstallState: state.cliInstallState,
     filesCount: state.repository?.files.length ?? 0,
     head: state.repository?.head ?? null,
     isRefreshing: state.isRefreshing,
     repoRoot: state.repository?.repoRoot ?? null,
+    revision: state.repository?.revision ?? null,
   }));
 
   return (
@@ -23,12 +25,27 @@ export function TopBar() {
         </div>
       </div>
       {repoRoot ? (
-        <div className="repo-meta">
-          <span><GitBranch aria-hidden="true" size={14} />{branch}</span>
-          <span><GitCommitHorizontal aria-hidden="true" size={14} />{head}</span>
-          <span>{filesCount} files</span>
+        <div className={`repo-meta${revision ? " repo-meta-revision" : ""}`}>
+          {revision ? (
+            <>
+              <span className="repo-meta-commit"><GitCommitHorizontal aria-hidden="true" size={14} />{revision.shortSha}</span>
+              <span className="repo-meta-subject">{revision.subject}</span>
+              <span>{filesCount} files</span>
+              <button className="repo-meta-exit" type="button" onClick={() => void selectRevision(null)}>
+                <X aria-hidden="true" size={13} />
+                <span>Back to uncommitted</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <span><GitBranch aria-hidden="true" size={14} />{branch}</span>
+              <span><GitCommitHorizontal aria-hidden="true" size={14} />{head}</span>
+              <span>{filesCount} files</span>
+            </>
+          )}
         </div>
       ) : null}
+      {repoRoot ? <CommitPicker /> : null}
       {isRefreshing ? (
         <div className="refresh-indicator" role="status">
           <Loader2 aria-hidden="true" size={14} className="spin" />

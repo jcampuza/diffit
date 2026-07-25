@@ -28,12 +28,12 @@ export function ErrorState({ message }: { message: string }) {
   );
 }
 
-export function CleanState() {
+export function CleanState({ revision }: { revision: string | null }) {
   return (
     <div className="center-state">
       <FolderGit2 aria-hidden="true" size={28} />
-      <h1>Working tree is clean</h1>
-      <p>No local changes were found in this repository.</p>
+      <h1>{revision ? "This commit is empty" : "Working tree is clean"}</h1>
+      <p>{revision ? "This commit does not change any files." : "No local changes were found in this repository."}</p>
     </div>
   );
 }

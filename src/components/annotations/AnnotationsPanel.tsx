@@ -1,6 +1,7 @@
-import { Check, MessageSquareText, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, GitPullRequestArrow, MessageSquareText, RotateCcw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { clearAnnotations, deleteAnnotation, setAnnotationStatus } from "../../annotationActions";
+import { selectRevision } from "../../repositoryActions";
 import { appActions, useShallowAppSelector } from "../../store";
 import type { Annotation } from "../../types";
 import { basename } from "../../utils/path";
@@ -13,10 +14,13 @@ interface AnnotationGroup {
 }
 
 export function AnnotationsPanel() {
-  const { annotations, diffPaths, open } = useShallowAppSelector((state) => ({
+  const { annotations, diffPaths, open, viewingCommit } = useShallowAppSelector((state) => ({
     annotations: state.annotations,
     diffPaths: state.repository?.files.map((file) => file.path) ?? [],
     open: state.annotationsPanelOpen,
+    // Comments anchor to working-tree line numbers, so they are not shown at all
+    // against a commit's diff.
+    viewingCommit: state.revision != null,
   }));
 
   const groups = useMemo(() => groupAnnotations(annotations), [annotations]);
@@ -39,17 +43,17 @@ export function AnnotationsPanel() {
       <div className="annotations-panel-heading">
         <span>
           Comments
-          {openCount > 0 ? <span className="annotations-panel-count">{openCount}</span> : null}
+          {openCount > 0 && !viewingCommit ? <span className="annotations-panel-count">{openCount}</span> : null}
         </span>
         <div className="annotations-panel-heading-actions">
-          {hasResolved ? (
+          {hasResolved && !viewingCommit ? (
             <ClearButton
               confirmLabel="Clear resolved?"
               label="Clear resolved"
               onConfirm={() => clearAnnotations(["resolved"])}
             />
           ) : null}
-          {annotations.length > 0 ? (
+          {annotations.length > 0 && !viewingCommit ? (
             <ClearButton confirmLabel="Clear all?" label="Clear" onConfirm={() => clearAnnotations()} />
           ) : null}
           <button
@@ -63,10 +67,10 @@ export function AnnotationsPanel() {
         </div>
       </div>
       <div className="annotations-panel-list">
-        {groups.length > 0 ? (
-          groups.map((group) => (
-            <AnnotationGroupSection key={group.file} diffPathSet={diffPathSet} group={group} />
-          ))
+        {viewingCommit ? (
+          <CommitModeEmptyState />
+        ) : groups.length > 0 ? (
+          groups.map((group) => <AnnotationGroupSection key={group.file} diffPathSet={diffPathSet} group={group} />)
         ) : (
           <div className="annotations-panel-empty">
             <MessageSquareText aria-hidden="true" size={22} />
@@ -76,6 +80,19 @@ export function AnnotationsPanel() {
         )}
       </div>
     </aside>
+  );
+}
+
+function CommitModeEmptyState() {
+  return (
+    <div className="annotations-panel-empty">
+      <MessageSquareText aria-hidden="true" size={22} />
+      <p>Comments apply to uncommitted changes.</p>
+      <button className="annotation-action-button" type="button" onClick={() => void selectRevision(null)}>
+        <GitPullRequestArrow aria-hidden="true" size={13} />
+        View uncommitted changes
+      </button>
+    </div>
   );
 }
 

@@ -1,6 +1,13 @@
 import { createStore, shallow, useSelector } from "@tanstack/react-store";
 import { getStoredViewMode, storeViewMode } from "./preferences";
-import type { Annotation, AnnotationSide, AnnotationsState, DiffFile, RepositoryDiff } from "./types";
+import type {
+  Annotation,
+  AnnotationSide,
+  AnnotationsState,
+  CommitSummary,
+  DiffFile,
+  RepositoryDiff,
+} from "./types";
 
 export interface AnnotationDraft {
   file: string;
@@ -12,9 +19,16 @@ export interface AnnotationDraft {
 
 export type ViewMode = "file" | "code";
 
+export type CommitsStatus = "idle" | "loading" | "loaded" | "error";
+
 export interface AppState {
   repository: RepositoryDiff | null;
   selectedPath: string | null;
+  revision: string | null;
+  commits: CommitSummary[];
+  commitsStatus: CommitsStatus;
+  commitsError: string | null;
+  commitsComplete: boolean;
   viewMode: ViewMode;
   findOpen: boolean;
   findQuery: string;
@@ -37,6 +51,11 @@ export interface AppState {
 const initialState: AppState = {
   repository: null,
   selectedPath: null,
+  revision: null,
+  commits: [],
+  commitsStatus: "idle",
+  commitsError: null,
+  commitsComplete: false,
   viewMode: getStoredViewMode() ?? "file",
   findOpen: false,
   findQuery: "",
@@ -80,11 +99,16 @@ export const appActions = {
         state.selectedPath && repository.files.some((file) => file.path === state.selectedPath)
           ? state.selectedPath
           : repository.files[0]?.path ?? null;
+      const movedRepository = state.repository?.repoRoot !== repository.repoRoot;
 
       return {
         ...state,
         repository,
         selectedPath,
+        commits: movedRepository ? [] : state.commits,
+        commitsStatus: movedRepository ? "idle" : state.commitsStatus,
+        commitsError: movedRepository ? null : state.commitsError,
+        commitsComplete: movedRepository ? false : state.commitsComplete,
       };
     });
   },
@@ -94,10 +118,49 @@ export const appActions = {
       ...state,
       repository: null,
       selectedPath: null,
+      revision: null,
+      commits: [],
+      commitsStatus: "idle",
+      commitsError: null,
+      commitsComplete: false,
       annotations: [],
       reviewPath: null,
       annotationDraft: null,
       error,
+    }));
+  },
+
+  setRevision(revision: string | null) {
+    appStore.setState((state) => ({
+      ...state,
+      revision,
+      annotationDraft: revision ? null : state.annotationDraft,
+    }));
+  },
+
+  startCommitsLoad() {
+    appStore.setState((state) => ({
+      ...state,
+      commitsStatus: "loading",
+      commitsError: null,
+    }));
+  },
+
+  setCommits(commits: CommitSummary[], commitsComplete: boolean) {
+    appStore.setState((state) => ({
+      ...state,
+      commits,
+      commitsComplete,
+      commitsStatus: "loaded",
+      commitsError: null,
+    }));
+  },
+
+  setCommitsError(commitsError: string) {
+    appStore.setState((state) => ({
+      ...state,
+      commitsStatus: "error",
+      commitsError,
     }));
   },
 
