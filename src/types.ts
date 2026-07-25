@@ -53,6 +53,16 @@ export interface SkillInstallResult {
   path: string;
 }
 
+/** Mirrors `UpdateStatus` in `src-tauri/src/updates.rs`. */
+export type UpdateStatus =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "upToDate" }
+  | { state: "available"; version: string; notes: string | null }
+  | { state: "downloading" }
+  | { state: "ready"; version: string }
+  | { state: "failed"; message: string };
+
 export type AnnotationSide = "old" | "new";
 export type AnnotationStatus = "open" | "resolved" | "outdated";
 

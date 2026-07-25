@@ -12,6 +12,7 @@
     "dev:vite": "vite --host 127.0.0.1 --port 1420",
     "build": "tauri build",
     "build:vite": "tsc && vite build",
+    "tauri": "tauri",
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
@@ -23,6 +24,7 @@
     "@tanstack/react-store": "^0.11.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "cmdk": "^1.1.1",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",

@@ -1,14 +1,16 @@
-import { Check, FolderOpen, Loader2, MoreVertical, Sparkles, Terminal } from "lucide-react";
+import { Check, Download, FolderOpen, Loader2, MoreVertical, Sparkles, Terminal } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { installAgentSkill } from "../annotationActions";
 import { installCli, openRepositoryFolder } from "../repositoryActions";
 import { useShallowAppSelector } from "../store";
+import { checkForUpdate } from "../updateActions";
 
 export function TopBarMenu() {
-  const { cliInstallState, commandOpen, findOpen } = useShallowAppSelector((state) => ({
+  const { cliInstallState, commandOpen, findOpen, updateState } = useShallowAppSelector((state) => ({
     cliInstallState: state.cliInstallState,
     commandOpen: state.commandOpen,
     findOpen: state.findOpen,
+    updateState: state.update.state,
   }));
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -149,6 +151,19 @@ export function TopBarMenu() {
           </MenuItem>
           <MenuItem icon={<Sparkles aria-hidden="true" size={15} />} onSelect={() => run(() => void installAgentSkill())}>
             Install agent skill
+          </MenuItem>
+          <MenuItem
+            icon={
+              updateState === "checking" ? (
+                <Loader2 aria-hidden="true" size={15} className="spin" />
+              ) : (
+                <Download aria-hidden="true" size={15} />
+              )
+            }
+            disabled={updateState === "checking" || updateState === "downloading"}
+            onSelect={() => run(() => void checkForUpdate({ force: true }))}
+          >
+            {updateState === "checking" ? "Checking for updates…" : "Check for updates"}
           </MenuItem>
         </div>
       ) : null}
