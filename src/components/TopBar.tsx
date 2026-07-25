@@ -1,20 +1,41 @@
-import { Check, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Terminal } from "lucide-react";
-import { installCli, loadRepository, openRepositoryFolder } from "../repositoryActions";
-import { appStore, useShallowAppSelector } from "../store";
+import { FolderGit2, GitBranch, GitCommitHorizontal, Loader2, PanelLeftClose, PanelLeftOpen, RefreshCw, Undo2 } from "lucide-react";
+import { loadRepository, selectRevision } from "../repositoryActions";
+import { appActions, appStore, useAppSelector, useShallowAppSelector } from "../store";
 import { basename } from "../utils/path";
+import { CommitPicker } from "./CommitPicker";
+import { TopBarMenu } from "./TopBarMenu";
+
+function SidebarToggle() {
+  const sidebarCollapsed = useAppSelector((state) => state.sidebarCollapsed);
+  const label = sidebarCollapsed ? "Show files (⌘B)" : "Hide files (⌘B)";
+
+  return (
+    <button
+      className="icon-button"
+      type="button"
+      aria-label={label}
+      aria-pressed={!sidebarCollapsed}
+      title={label}
+      onClick={() => appActions.toggleSidebar()}
+    >
+      {sidebarCollapsed ? <PanelLeftOpen aria-hidden="true" size={16} /> : <PanelLeftClose aria-hidden="true" size={16} />}
+    </button>
+  );
+}
 
 export function TopBar() {
-  const { branch, cliInstallState, filesCount, head, isRefreshing, repoRoot } = useShallowAppSelector((state) => ({
+  const { branch, filesCount, head, isRefreshing, repoRoot, revision } = useShallowAppSelector((state) => ({
     branch: state.repository?.branch ?? null,
-    cliInstallState: state.cliInstallState,
     filesCount: state.repository?.files.length ?? 0,
     head: state.repository?.head ?? null,
     isRefreshing: state.isRefreshing,
     repoRoot: state.repository?.repoRoot ?? null,
+    revision: state.repository?.revision ?? null,
   }));
 
   return (
     <header className="top-bar">
+      <SidebarToggle />
       <div className="repo-title">
         <FolderGit2 aria-hidden="true" size={18} />
         <div>
@@ -24,10 +45,33 @@ export function TopBar() {
       </div>
       {repoRoot ? (
         <div className="repo-meta">
-          <span><GitBranch aria-hidden="true" size={14} />{branch}</span>
-          <span><GitCommitHorizontal aria-hidden="true" size={14} />{head}</span>
+          {revision ? null : (
+            <>
+              <span>
+                <GitBranch aria-hidden="true" size={14} />
+                {branch}
+              </span>
+              {/* The picker only shows a sha for a selected commit, so HEAD lives here. */}
+              <span>
+                <GitCommitHorizontal aria-hidden="true" size={14} />
+                {head}
+              </span>
+            </>
+          )}
           <span>{filesCount} files</span>
         </div>
+      ) : null}
+      {repoRoot ? <CommitPicker /> : null}
+      {repoRoot && revision ? (
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="Back to uncommitted changes"
+          title="Back to uncommitted changes"
+          onClick={() => void selectRevision(null)}
+        >
+          <Undo2 aria-hidden="true" size={16} />
+        </button>
       ) : null}
       {isRefreshing ? (
         <div className="refresh-indicator" role="status">
@@ -35,17 +79,16 @@ export function TopBar() {
           <span>Refreshing</span>
         </div>
       ) : null}
-      <button className="text-icon-button" type="button" onClick={() => void openRepositoryFolder()}>
-        <FolderOpen aria-hidden="true" size={15} />
-        <span>Open folder</span>
-      </button>
-      <button className="text-icon-button" type="button" onClick={() => void installCli()} disabled={cliInstallState === "installing"}>
-        {cliInstallState === "installing" ? <Loader2 aria-hidden="true" size={15} className="spin" /> : cliInstallState === "installed" ? <Check aria-hidden="true" size={15} /> : <Terminal aria-hidden="true" size={15} />}
-        <span>{cliInstallState === "installed" ? "CLI installed" : "Install CLI"}</span>
-      </button>
-      <button className="icon-button" type="button" onClick={() => void loadRepository(appStore.state.repository?.cwd, { silent: false })} aria-label="Reload">
+      <button
+        className="icon-button"
+        type="button"
+        onClick={() => void loadRepository(appStore.state.repository?.cwd, { silent: false })}
+        aria-label="Reload"
+        title="Reload (⌘R)"
+      >
         <RefreshCw aria-hidden="true" size={16} />
       </button>
+      <TopBarMenu />
     </header>
   );
 }

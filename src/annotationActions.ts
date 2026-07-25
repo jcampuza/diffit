@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { appActions, appStore, type AnnotationDraft } from "./store";
 import type { AnnotationStatus, AnnotationsState, RepositoryChanged, SkillInstallResult } from "./types";
+import { listenToThisWindow } from "./utils/events";
 
 function buildAgentPrompt(reviewPath: string) {
   return `Review comments were left on this repo's working-tree diff in \`${reviewPath}\` (Diffit review format, JSON). Read it. For each annotation with \`"status": "open"\`: open \`file\` at \`startLine\`–\`endLine\` (on the \`side\` indicated — \`"old"\` line numbers refer to the HEAD version), and address the \`comment\`. After addressing one, append to its \`replies\` array \`{ "author": "agent", "text": "<one-line summary of what you did>", "at": "<ISO timestamp>" }\` and set \`"status": "resolved"\`. If you deliberately decline one, reply with your reasoning and leave it \`"open"\`. Preserve every other field and any fields you don't recognize; keep the file valid JSON.`;
@@ -31,7 +31,7 @@ export async function installAgentSkill() {
   }
 }
 
-export async function loadAnnotations(cwd?: string) {
+export async function loadAnnotations(cwd?: string, options?: { shouldApply?: () => boolean }) {
   const resolvedCwd = cwd ?? appStore.state.repository?.repoRoot;
   if (!resolvedCwd) {
     return;
@@ -39,6 +39,10 @@ export async function loadAnnotations(cwd?: string) {
 
   try {
     const state = await invoke<AnnotationsState>("load_annotations", { cwd: resolvedCwd });
+    if (options?.shouldApply && !options.shouldApply()) {
+      return;
+    }
+
     appActions.setAnnotations(state);
   } catch (loadError) {
     console.error("Could not load annotations:", loadError);
@@ -111,7 +115,7 @@ export async function clearAnnotations(statuses?: AnnotationStatus[]) {
 }
 
 export async function listenForAnnotationChanges() {
-  return listen<RepositoryChanged>("annotations-changed", (event) => {
+  return listenToThisWindow<RepositoryChanged>("annotations-changed", (event) => {
     void loadAnnotations(event.payload.cwd);
   });
 }

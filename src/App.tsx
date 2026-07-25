@@ -4,16 +4,18 @@ import { DiffPanel } from "./components/DiffPanel";
 import { Sidebar } from "./components/Sidebar";
 import { AppMessages, TopBar } from "./components/TopBar";
 import { useAppLifecycle } from "./hooks/useAppLifecycle";
+import { useAppSelector } from "./store";
 
 function App() {
   useAppLifecycle();
+  const sidebarCollapsed = useAppSelector((state) => state.sidebarCollapsed);
 
   return (
     <div className="app-shell">
       <TopBar />
       <AppMessages />
       <main className="workspace">
-        <Sidebar />
+        {sidebarCollapsed ? null : <Sidebar />}
         <DiffPanel />
         <AnnotationsPanel />
       </main>

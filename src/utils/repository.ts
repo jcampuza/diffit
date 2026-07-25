@@ -7,5 +7,6 @@ export function repositorySignature(repository: RepositoryDiff) {
     files: repository.files,
     head: repository.head,
     repoRoot: repository.repoRoot,
+    revision: repository.revision,
   });
 }

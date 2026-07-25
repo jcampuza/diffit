@@ -11,15 +11,35 @@ export interface DiffFile {
   deletions: number;
 }
 
+export interface CommitSummary {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  relativeDate: string;
+  isoDate: string;
+}
+
+export interface RevisionInfo {
+  sha: string;
+  shortSha: string;
+  subject: string;
+}
+
 export interface RepositoryDiff {
   cwd: string;
   repoRoot: string;
   branch: string;
   head: string;
   files: DiffFile[];
+  revision: RevisionInfo | null;
 }
 
 export interface RepositoryChanged {
+  cwd: string;
+}
+
+export interface WindowContext {
   cwd: string;
 }
 

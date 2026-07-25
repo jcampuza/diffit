@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { CodeViewLineSelection } from "@pierre/diffs";
 import type { CodeViewItem, DiffLineAnnotation, GetHoveredLineResult, LineAnnotation } from "@pierre/diffs";
 import { appActions, useShallowAppSelector } from "../../store";
-import type { AnnotationSide, DiffFile } from "../../types";
+import type { Annotation, AnnotationSide, DiffFile } from "../../types";
 import {
   annotationSideFromDiffSide,
   attachAnnotationsToItems,
@@ -12,6 +12,9 @@ import {
 } from "../../utils/diff";
 import { AnnotationCard } from "./AnnotationCard";
 import { AnnotationComposer } from "./AnnotationComposer";
+
+const NO_ANNOTATIONS: readonly Annotation[] = [];
+const renderNoGutterUtility = () => null;
 
 interface UseAnnotationCodeViewOptions {
   activeFindMatch: FindMatch | null;
@@ -26,16 +29,25 @@ export function useAnnotationCodeView({
   files,
   findMatchFilePath = null,
 }: UseAnnotationCodeViewOptions) {
-  const { annotationDraft, annotations } = useShallowAppSelector((state) => ({
+  const { annotationDraft, annotations, hidden } = useShallowAppSelector((state) => ({
     annotationDraft: state.annotationDraft,
     annotations: state.annotations,
+    // Annotations anchor to working-tree line numbers, so nothing about them lines
+    // up with a past commit's diff. Viewing a commit hides them entirely.
+    hidden: state.revision != null,
   }));
   const [userSelectedLines, setUserSelectedLines] = useState<CodeViewLineSelection | null>(null);
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files]);
 
   const items = useMemo(
-    () => attachAnnotationsToItems(baseItems, filesByPath, annotations, annotationDraft),
-    [annotationDraft, annotations, baseItems, filesByPath],
+    () =>
+      attachAnnotationsToItems(
+        baseItems,
+        filesByPath,
+        hidden ? NO_ANNOTATIONS : annotations,
+        hidden ? null : annotationDraft,
+      ),
+    [annotationDraft, annotations, baseItems, filesByPath, hidden],
   );
 
   const selectedLines = useMemo(() => {
@@ -126,7 +138,7 @@ export function useAnnotationCodeView({
     items,
     onSelectedLinesChange: setUserSelectedLines,
     renderAnnotation,
-    renderGutterUtility,
+    renderGutterUtility: hidden ? renderNoGutterUtility : renderGutterUtility,
     selectedLines,
   };
 }

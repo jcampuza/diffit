@@ -1,20 +1,26 @@
 mod anchor;
 mod annotations;
+mod revision;
+mod window;
 
 use annotations::ensure_diffit_dir;
+use revision::{CommitContext, RevisionInfo};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use similar::{ChangeTag, TextDiff};
 use std::{
     cmp::Ordering,
-    env, fs, io,
+    collections::HashMap,
+    env, fs,
+    io::{self, Write},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{mpsc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use window::{WindowRegistry, MAIN_WINDOW_LABEL};
 
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(250);
 
@@ -58,6 +64,8 @@ struct RepositoryDiff {
     branch: String,
     head: String,
     files: Vec<DiffFile>,
+    /// `None` when the diff is the working tree, otherwise the commit it came from.
+    revision: Option<RevisionInfo>,
 }
 
 #[derive(Serialize)]
@@ -91,7 +99,7 @@ const DIFFIT_REVIEW_SKILL: &str = include_str!("../skills/diffit-review/SKILL.md
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum DiffStatus {
+pub(crate) enum DiffStatus {
     Added,
     Deleted,
     Modified,
@@ -100,16 +108,79 @@ enum DiffStatus {
 }
 
 #[derive(Debug)]
-struct StatusEntry {
-    x: u8,
-    y: u8,
-    path: String,
-    old_path: Option<String>,
+pub(crate) struct StatusEntry {
+    pub(crate) x: u8,
+    pub(crate) y: u8,
+    pub(crate) path: String,
+    pub(crate) old_path: Option<String>,
+}
+
+/// Where one side of a diff reads its content from.
+enum ContentSource {
+    /// The blob at `<rev>:<path>`.
+    Blob(String),
+    /// The file on disk, relative to the repository root.
+    WorkTree,
+}
+
+/// The pair of content sources a diff is built from.
+struct DiffSources {
+    old: ContentSource,
+    new: ContentSource,
+}
+
+impl DiffSources {
+    /// Uncommitted changes: `HEAD` against the files on disk.
+    fn working_tree() -> Self {
+        Self {
+            old: ContentSource::Blob("HEAD".to_string()),
+            new: ContentSource::WorkTree,
+        }
+    }
+
+    /// A commit against the tree it was based on.
+    fn commit(context: &CommitContext) -> Self {
+        Self {
+            old: ContentSource::Blob(context.base.clone()),
+            new: ContentSource::Blob(context.sha.clone()),
+        }
+    }
 }
 
 #[derive(Default)]
 struct RepositoryWatcherState {
-    watcher: Mutex<Option<RepositoryWatcher>>,
+    watchers: Mutex<HashMap<String, WatcherSlot>>,
+}
+
+/// A watcher that is still being built, or one that is running.
+///
+/// Reserving the slot before the (comparatively slow) watcher is constructed keeps the
+/// registry lock short without letting two loads for the same window both install one.
+enum WatcherSlot {
+    Pending(PathBuf),
+    Active(Box<RepositoryWatcher>),
+}
+
+impl WatcherSlot {
+    fn repo_root(&self) -> &Path {
+        match self {
+            Self::Pending(repo_root) => repo_root,
+            Self::Active(watcher) => &watcher.repo_root,
+        }
+    }
+
+    fn is_pending_for(&self, repo_root: &Path) -> bool {
+        matches!(self, Self::Pending(pending) if pending.as_path() == repo_root)
+    }
+
+    /// Hands back the watcher whose `Drop` joins worker threads, so the caller can drop it
+    /// away from the registry lock.
+    fn into_watcher(self) -> Option<Box<RepositoryWatcher>> {
+        match self {
+            Self::Pending(_) => None,
+            Self::Active(watcher) => Some(watcher),
+        }
+    }
 }
 
 struct RepositoryWatcher {
@@ -135,34 +206,56 @@ impl Drop for RepositoryWatcher {
     }
 }
 
-#[tauri::command]
+/// Runs off the UI thread: a synchronous command body executes on the thread that
+/// received the IPC message, which on macOS is the thread AppKit drives the windows
+/// from, so a large diff would stall window switching until the load finished.
+#[tauri::command(async)]
 fn load_repository(
     app: AppHandle,
+    window: tauri::Window,
+    registry: State<'_, WindowRegistry>,
     watcher_state: State<'_, RepositoryWatcherState>,
     cwd: Option<String>,
+    revision: Option<String>,
 ) -> Result<RepositoryDiff, String> {
-    let cwd = cwd
-        .map(PathBuf::from)
-        .map(Ok)
-        .unwrap_or_else(env::current_dir)
-        .map_err(|error| format!("Could not resolve the current directory: {error}"))?;
+    let cwd = match cwd {
+        Some(cwd) => PathBuf::from(cwd),
+        None => window::window_cwd(&window, &registry)?,
+    };
     let repo_root = git_text(&cwd, &["rev-parse", "--show-toplevel"])?;
     let repo_root = PathBuf::from(repo_root.trim());
     let branch = current_branch(&repo_root)?;
-    let head = git_text(&repo_root, &["rev-parse", "--short", "HEAD"])
-        .unwrap_or_else(|_| "no commits".to_string());
-    let statuses = git_bytes(
-        &repo_root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    )?;
-    let mut files = parse_status(&statuses)?
-        .into_iter()
-        .filter_map(|entry| read_diff_file(&repo_root, entry).transpose())
-        .collect::<Result<Vec<_>, String>>()?;
+
+    let context = match revision.as_deref() {
+        Some(revision) => Some(revision::resolve_commit(&repo_root, revision)?),
+        None => None,
+    };
+
+    let (head, entries, sources) = match context.as_ref() {
+        Some(context) => (
+            context.short_sha.clone(),
+            revision::commit_status_entries(&repo_root, context)?,
+            DiffSources::commit(context),
+        ),
+        None => {
+            let head = git_text(&repo_root, &["rev-parse", "--short", "HEAD"])
+                .unwrap_or_else(|_| "no commits".to_string());
+            let statuses = git_bytes(
+                &repo_root,
+                &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            )?;
+            (head, parse_status(&statuses)?, DiffSources::working_tree())
+        }
+    };
+
+    let mut files = read_diff_files(&repo_root, &sources, entries);
 
     files.sort_by(|left, right| compare_tree_paths(&left.path, &right.path));
 
-    watch_repository(&app, &watcher_state, &repo_root)?;
+    // The window may have been pointed at a different repository since it was created,
+    // so keep the registry in step with what it is actually showing.
+    registry.register(window.label(), &cwd, Some(&repo_root))?;
+    watch_repository(&app, &watcher_state, window.label(), &repo_root)?;
 
     Ok(RepositoryDiff {
         cwd: cwd.to_string_lossy().into_owned(),
@@ -170,6 +263,7 @@ fn load_repository(
         branch,
         head: head.trim().to_string(),
         files,
+        revision: context.map(CommitContext::into_info),
     })
 }
 
@@ -234,14 +328,18 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_focus();
-            }
+            let cwd = PathBuf::from(cwd);
+            let Ok(label) = window::focus_or_open_window(app, &cwd) else {
+                return;
+            };
 
-            let _ = app.emit(
-                "repository-changed",
+            // Distinct from `repository-changed`: the user asked for this repository, so the
+            // window should show its working tree rather than keep the commit it was on.
+            let _ = app.emit_to(
+                label.as_str(),
+                "repository-opened",
                 RepositoryChanged {
-                    cwd: cwd.to_string(),
+                    cwd: cwd.to_string_lossy().into_owned(),
                 },
             );
         }));
@@ -249,7 +347,24 @@ pub fn run() {
 
     builder
         .manage(RepositoryWatcherState::default())
+        .manage(WindowRegistry::default())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let registry = app.state::<WindowRegistry>();
+            if let Err(error) = window::register_startup_window(&registry, MAIN_WINDOW_LABEL) {
+                eprintln!("{error}");
+            }
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if !matches!(event, WindowEvent::Destroyed) {
+                return;
+            }
+
+            window.state::<WindowRegistry>().remove(window.label());
+            release_watcher(&window.state::<RepositoryWatcherState>(), window.label());
+        })
         .invoke_handler(tauri::generate_handler![
             annotations::clear_annotations,
             annotations::create_annotation,
@@ -259,28 +374,107 @@ pub fn run() {
             install_agent_skill,
             install_terminal_helper,
             load_repository,
+            revision::list_commits,
+            window::window_context,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Diffit");
 }
 
+/// Drops the watcher for `label`, stopping its worker threads.
+///
+/// The drop joins the worker threads, so it runs off the window event thread.
+fn release_watcher(watcher_state: &RepositoryWatcherState, label: &str) {
+    let slot = watcher_state
+        .watchers
+        .lock()
+        .ok()
+        .and_then(|mut watchers| watchers.remove(label));
+
+    drop_watcher_off_thread(slot.and_then(WatcherSlot::into_watcher));
+}
+
+/// Drops a watcher away from the caller's thread, because its `Drop` joins worker threads
+/// that may be parked for a debounce interval.
+fn drop_watcher_off_thread(watcher: Option<Box<RepositoryWatcher>>) {
+    if let Some(watcher) = watcher {
+        thread::spawn(move || drop(watcher));
+    }
+}
+
+/// Releases the reservation `watch_repository` made, when building the watcher failed.
+fn clear_pending_watcher(watcher_state: &RepositoryWatcherState, label: &str, repo_root: &Path) {
+    if let Ok(mut active_watchers) = watcher_state.watchers.lock() {
+        if active_watchers
+            .get(label)
+            .is_some_and(|slot| slot.is_pending_for(repo_root))
+        {
+            active_watchers.remove(label);
+        }
+    }
+}
+
 fn watch_repository(
     app: &AppHandle,
     watcher_state: &State<'_, RepositoryWatcherState>,
+    label: &str,
     repo_root: &Path,
 ) -> Result<(), String> {
-    let mut active_watcher = watcher_state
-        .watcher
+    let replaced = {
+        let mut active_watchers = watcher_state
+            .watchers
+            .lock()
+            .map_err(|_| "Repository watcher state was poisoned.".to_string())?;
+
+        if active_watchers
+            .get(label)
+            .is_some_and(|slot| slot.repo_root() == repo_root)
+        {
+            return Ok(());
+        }
+
+        active_watchers.insert(
+            label.to_string(),
+            WatcherSlot::Pending(repo_root.to_path_buf()),
+        )
+    };
+
+    drop_watcher_off_thread(replaced.and_then(WatcherSlot::into_watcher));
+
+    let watcher = match build_repository_watcher(app, label, repo_root) {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            clear_pending_watcher(watcher_state, label, repo_root);
+            return Err(error);
+        }
+    };
+
+    let mut active_watchers = watcher_state
+        .watchers
         .lock()
         .map_err(|_| "Repository watcher state was poisoned.".to_string())?;
 
-    if active_watcher
-        .as_ref()
-        .is_some_and(|watcher| watcher.repo_root == repo_root)
+    if !active_watchers
+        .get(label)
+        .is_some_and(|slot| slot.is_pending_for(repo_root))
     {
+        // A later load, or the window closing, superseded this watcher before it was ready.
+        drop(active_watchers);
+        drop_watcher_off_thread(Some(Box::new(watcher)));
         return Ok(());
     }
 
+    active_watchers.insert(label.to_string(), WatcherSlot::Active(Box::new(watcher)));
+
+    Ok(())
+}
+
+/// Builds the repository and annotations watchers for `repo_root`, without holding any lock.
+fn build_repository_watcher(
+    app: &AppHandle,
+    label: &str,
+    repo_root: &Path,
+) -> Result<RepositoryWatcher, String> {
     let (repo_event_tx, repo_event_rx) = mpsc::channel::<()>();
     let (annotations_event_tx, annotations_event_rx) = mpsc::channel::<()>();
     let (repo_stop_tx, repo_stop_rx) = mpsc::channel::<()>();
@@ -288,6 +482,7 @@ fn watch_repository(
     let cwd = repo_root.to_string_lossy().into_owned();
     let repo_worker = spawn_debounced_emitter(
         app.clone(),
+        label.to_string(),
         repo_stop_rx,
         repo_event_rx,
         "repository-changed",
@@ -295,6 +490,7 @@ fn watch_repository(
     );
     let annotations_worker = spawn_debounced_emitter(
         app.clone(),
+        label.to_string(),
         annotations_stop_rx,
         annotations_event_rx,
         "annotations-changed",
@@ -340,7 +536,7 @@ fn watch_repository(
         .watch(&diffit_dir, RecursiveMode::NonRecursive)
         .map_err(|error| format!("Could not watch {}: {error}", diffit_dir.display()))?;
 
-    *active_watcher = Some(RepositoryWatcher {
+    Ok(RepositoryWatcher {
         repo_root: repo_root.to_path_buf(),
         _repo_watcher: repo_watcher,
         _annotations_watcher: annotations_watcher,
@@ -348,13 +544,12 @@ fn watch_repository(
         annotations_stop_tx,
         repo_worker: Some(repo_worker),
         annotations_worker: Some(annotations_worker),
-    });
-
-    Ok(())
+    })
 }
 
 fn spawn_debounced_emitter(
     app: AppHandle,
+    label: String,
     stop_rx: mpsc::Receiver<()>,
     event_rx: mpsc::Receiver<()>,
     event_name: &'static str,
@@ -377,7 +572,8 @@ fn spawn_debounced_emitter(
             match event_rx.recv_timeout(WATCHER_DEBOUNCE) {
                 Ok(()) => continue,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let _ = app.emit(
+                    let _ = app.emit_to(
+                        label.as_str(),
                         event_name,
                         RepositoryChanged {
                             cwd: cwd.clone(),
@@ -557,21 +753,48 @@ fn current_branch(repo_root: &Path) -> Result<String, String> {
     ))
 }
 
-fn read_diff_file(repo_root: &Path, entry: StatusEntry) -> Result<Option<DiffFile>, String> {
-    let status = classify_status(&entry);
-    let new_path = repo_root.join(&entry.path);
-    let old_path = entry.old_path.as_deref().unwrap_or(&entry.path);
-    let old_bytes = match status {
-        DiffStatus::Added | DiffStatus::Untracked => Vec::new(),
-        _ => git_bytes(repo_root, &["show", &format!("HEAD:{old_path}")]).unwrap_or_default(),
-    };
-    let new_bytes = match status {
-        DiffStatus::Deleted => Vec::new(),
-        _ => fs::read(&new_path).unwrap_or_default(),
-    };
+/// Builds the diff for every changed file, reading all blobs in one batch.
+fn read_diff_files(
+    repo_root: &Path,
+    sources: &DiffSources,
+    entries: Vec<StatusEntry>,
+) -> Vec<DiffFile> {
+    let statuses = entries.iter().map(classify_status).collect::<Vec<_>>();
 
-    let old_text = text_from_bytes(&old_bytes);
-    let new_text = text_from_bytes(&new_bytes);
+    let mut requests = Vec::with_capacity(entries.len() * 2);
+    for (entry, status) in entries.iter().zip(&statuses) {
+        let old_path = entry.old_path.as_deref().unwrap_or(&entry.path);
+        requests.push(match status {
+            DiffStatus::Added | DiffStatus::Untracked => SideRequest::Empty,
+            _ => SideRequest::for_side(&sources.old, old_path),
+        });
+        requests.push(match status {
+            DiffStatus::Deleted => SideRequest::Empty,
+            _ => SideRequest::for_side(&sources.new, &entry.path),
+        });
+    }
+
+    let mut sides = read_sides(repo_root, &requests).into_iter();
+
+    entries
+        .into_iter()
+        .zip(statuses)
+        .filter_map(|(entry, status)| {
+            let old_bytes = sides.next().unwrap_or_default();
+            let new_bytes = sides.next().unwrap_or_default();
+            build_diff_file(entry, status, &old_bytes, &new_bytes)
+        })
+        .collect()
+}
+
+fn build_diff_file(
+    entry: StatusEntry,
+    status: DiffStatus,
+    old_bytes: &[u8],
+    new_bytes: &[u8],
+) -> Option<DiffFile> {
+    let old_text = text_from_bytes(old_bytes);
+    let new_text = text_from_bytes(new_bytes);
     let binary = old_text.is_none() || new_text.is_none();
     let (old_content, new_content) = match (old_text, new_text) {
         (Some(old_content), Some(new_content)) => (old_content, new_content),
@@ -579,12 +802,12 @@ fn read_diff_file(repo_root: &Path, entry: StatusEntry) -> Result<Option<DiffFil
     };
 
     if old_content == new_content && !matches!(status, DiffStatus::Renamed) {
-        return Ok(None);
+        return None;
     }
 
     let (additions, deletions) = count_changes(&old_content, &new_content);
 
-    Ok(Some(DiffFile {
+    Some(DiffFile {
         path: entry.path,
         old_path: entry.old_path,
         status,
@@ -593,10 +816,153 @@ fn read_diff_file(repo_root: &Path, entry: StatusEntry) -> Result<Option<DiffFil
         binary,
         additions,
         deletions,
-    }))
+    })
 }
 
-fn classify_status(entry: &StatusEntry) -> DiffStatus {
+/// One side of one file, before its content has been read.
+enum SideRequest {
+    /// The file does not exist on this side.
+    Empty,
+    /// A `<rev>:<path>` object spec.
+    Blob(String),
+    /// A path relative to the repository root.
+    WorkTree(String),
+}
+
+impl SideRequest {
+    fn for_side(source: &ContentSource, path: &str) -> Self {
+        match source {
+            ContentSource::Blob(rev) => Self::Blob(format!("{rev}:{path}")),
+            ContentSource::WorkTree => Self::WorkTree(path.to_string()),
+        }
+    }
+}
+
+/// Resolves every side of every file. A missing blob or file reads as empty, as it does
+/// for files git cannot show.
+fn read_sides(repo_root: &Path, requests: &[SideRequest]) -> Vec<Vec<u8>> {
+    let specs = requests
+        .iter()
+        .filter_map(|request| match request {
+            SideRequest::Blob(spec) => Some(spec.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut blobs = read_blobs(repo_root, &specs).into_iter();
+
+    requests
+        .iter()
+        .map(|request| match request {
+            SideRequest::Empty => Vec::new(),
+            SideRequest::Blob(_) => blobs.next().unwrap_or_default(),
+            SideRequest::WorkTree(path) => fs::read(repo_root.join(path)).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Reads every object in a single `git cat-file --batch`.
+///
+/// Starting a `git show` per file costs milliseconds of process start-up each, which
+/// dominates the load of a repository with many changed files. Batch input is newline
+/// separated, so a path containing a newline falls back to one `git show` per object,
+/// as does any batch git could not complete.
+fn read_blobs(repo_root: &Path, specs: &[&str]) -> Vec<Vec<u8>> {
+    if specs.is_empty() {
+        return Vec::new();
+    }
+
+    if !specs.iter().any(|spec| spec.contains(['\n', '\r'])) {
+        if let Ok(blobs) = batch_read_blobs(repo_root, specs) {
+            if blobs.len() == specs.len() {
+                return blobs;
+            }
+        }
+    }
+
+    specs
+        .iter()
+        .map(|spec| git_bytes(repo_root, &["show", spec]).unwrap_or_default())
+        .collect()
+}
+
+fn batch_read_blobs(repo_root: &Path, specs: &[&str]) -> Result<Vec<Vec<u8>>, String> {
+    let mut child = Command::new("git")
+        .args(["cat-file", "--batch"])
+        .current_dir(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Could not run git: {error}"))?;
+
+    let mut input = String::new();
+    for spec in specs {
+        input.push_str(spec);
+        input.push('\n');
+    }
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Could not write to git.".to_string())?;
+    // git stops reading once its own output pipe fills, so the write has to overlap the read.
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("Could not run git: {error}"))?;
+    let _ = writer.join();
+
+    if !output.status.success() {
+        return Err("Could not read the repository contents.".to_string());
+    }
+
+    parse_cat_file_batch(&output.stdout, specs.len())
+}
+
+/// Parses `git cat-file --batch` output.
+///
+/// Each request answers with either `<oid> <type> <size>` followed by that many bytes and
+/// a newline, or a header without a size (`missing`, `ambiguous`) and no content at all.
+fn parse_cat_file_batch(bytes: &[u8], expected: usize) -> Result<Vec<Vec<u8>>, String> {
+    let mut blobs = Vec::with_capacity(expected);
+    let mut index = 0;
+
+    while blobs.len() < expected {
+        let Some(rest) = bytes.get(index..) else {
+            return Err("Git object output ended early.".to_string());
+        };
+        let Some(newline) = rest.iter().position(|byte| *byte == b'\n') else {
+            return Err("Git object output ended early.".to_string());
+        };
+        let header = String::from_utf8_lossy(&rest[..newline]);
+        index += newline + 1;
+
+        let Some(size) = header
+            .rsplit(' ')
+            .next()
+            .and_then(|size| size.parse::<usize>().ok())
+        else {
+            blobs.push(Vec::new());
+            continue;
+        };
+
+        if index + size > bytes.len() {
+            return Err("Git object output was truncated.".to_string());
+        }
+
+        blobs.push(bytes[index..index + size].to_vec());
+        // Skip the content and the newline git writes after it.
+        index += size + 1;
+    }
+
+    Ok(blobs)
+}
+
+pub(crate) fn classify_status(entry: &StatusEntry) -> DiffStatus {
     if entry.x == b'?' && entry.y == b'?' {
         return DiffStatus::Untracked;
     }
@@ -698,9 +1064,55 @@ pub(crate) fn git_bytes(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_tree_paths, is_ignored_watch_path, should_emit_watch_event};
+    use super::{
+        compare_tree_paths, is_ignored_watch_path, parse_cat_file_batch, should_emit_watch_event,
+    };
     use notify::EventKind;
     use std::path::PathBuf;
+
+    #[test]
+    fn cat_file_batch_reads_content_by_its_declared_size() {
+        let raw = b"1111111 blob 6\nhello\n\n2222222 blob 3\na\nb\n";
+        let blobs = parse_cat_file_batch(raw, 2).expect("parsing should succeed");
+
+        assert_eq!(blobs.len(), 2);
+        assert_eq!(blobs[0], b"hello\n");
+        assert_eq!(blobs[1], b"a\nb");
+    }
+
+    #[test]
+    fn cat_file_batch_reads_missing_objects_as_empty() {
+        let raw = b"HEAD:gone.txt missing\n3333333 blob 2\nhi\n";
+        let blobs = parse_cat_file_batch(raw, 2).expect("parsing should succeed");
+
+        assert!(blobs[0].is_empty());
+        assert_eq!(blobs[1], b"hi");
+    }
+
+    #[test]
+    fn cat_file_batch_reads_an_empty_object() {
+        let raw = b"4444444 blob 0\n\n";
+        let blobs = parse_cat_file_batch(raw, 1).expect("parsing should succeed");
+
+        assert_eq!(blobs.len(), 1);
+        assert!(blobs[0].is_empty());
+    }
+
+    #[test]
+    fn cat_file_batch_stops_at_the_requested_count() {
+        let raw = b"5555555 blob 1\nx\n6666666 blob 1\ny\n";
+        assert_eq!(
+            parse_cat_file_batch(raw, 1).expect("parsing should succeed"),
+            vec![b"x".to_vec()],
+        );
+    }
+
+    #[test]
+    fn cat_file_batch_rejects_short_and_truncated_output() {
+        assert!(parse_cat_file_batch(b"", 1).is_err());
+        assert!(parse_cat_file_batch(b"7777777 blob 1\nx\n", 2).is_err());
+        assert!(parse_cat_file_batch(b"8888888 blob 40\nshort\n", 1).is_err());
+    }
 
     #[test]
     fn tree_path_order_puts_nested_directory_files_before_sibling_files() {
