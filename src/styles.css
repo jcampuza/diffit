@@ -279,6 +279,52 @@ input {
   background: #321d1b;
 }
 
+.update-banner {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid #343028;
+  color: #e7e1d5;
+  background: #1e2733;
+  font-size: 12px;
+}
+
+.update-banner > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-banner em {
+  color: #a4a096;
+  font-style: normal;
+}
+
+.update-banner-error {
+  color: #ffe2dd;
+  background: #321d1b;
+}
+
+.update-banner-action {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid #4a5a6d;
+  border-radius: 5px;
+  color: inherit;
+  background: #26364a;
+  font: inherit;
+  cursor: pointer;
+}
+
+.update-banner-action:hover {
+  background: #2f4159;
+}
+
 /* Flex rather than grid: the sidebar is user-resizable and can be hidden
    entirely, so the column count is not fixed. */
 .workspace {

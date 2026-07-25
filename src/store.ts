@@ -16,6 +16,7 @@ import type {
   CommitSummary,
   DiffFile,
   RepositoryDiff,
+  UpdateStatus,
 } from "./types";
 
 export interface AnnotationDraft {
@@ -57,6 +58,9 @@ export interface AppState {
   annotationDraft: AnnotationDraft | null;
   annotationsPanelOpen: boolean;
   annotationJump: { file: string; side: AnnotationSide; line: number; nonce: number } | null;
+  update: UpdateStatus;
+  /** Set when the user dismisses a banner, so it does not come back until the status changes. */
+  updateDismissed: boolean;
 }
 
 const initialState: AppState = {
@@ -86,6 +90,8 @@ const initialState: AppState = {
   annotationDraft: null,
   annotationsPanelOpen: false,
   annotationJump: null,
+  update: { state: "idle" },
+  updateDismissed: false,
 };
 
 export const appStore = createStore(initialState);
@@ -326,6 +332,22 @@ export const appActions = {
     appStore.setState((state) => ({
       ...state,
       annotationsPanelOpen: !state.annotationsPanelOpen,
+    }));
+  },
+
+  setUpdateStatus(update: UpdateStatus) {
+    appStore.setState((state) => ({
+      ...state,
+      update,
+      // A new status is new information, so an earlier dismissal no longer applies.
+      updateDismissed: state.update.state === update.state ? state.updateDismissed : false,
+    }));
+  },
+
+  dismissUpdate() {
+    appStore.setState((state) => ({
+      ...state,
+      updateDismissed: true,
     }));
   },
 

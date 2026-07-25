@@ -1,6 +1,7 @@
 mod anchor;
 mod annotations;
 mod revision;
+mod updates;
 mod window;
 
 use annotations::ensure_diffit_dir;
@@ -327,6 +328,10 @@ pub fn run() {
 
     #[cfg(desktop)]
     {
+        builder = builder
+            .manage(updates::UpdateState::default())
+            .plugin(tauri_plugin_updater::Builder::new().build());
+
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, cwd| {
             let cwd = PathBuf::from(cwd);
             let Ok(label) = window::focus_or_open_window(app, &cwd) else {
@@ -375,6 +380,9 @@ pub fn run() {
             install_terminal_helper,
             load_repository,
             revision::list_commits,
+            updates::check_for_update,
+            updates::install_update,
+            updates::update_status,
             window::window_context,
         ])
         .run(tauri::generate_context!())

@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release macOS arm64
+    runs-on: macos-15
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The updater compares semver, so every build from main needs a version higher
+      # than the last one. `run_number` only ever increases, which keeps releases
+      # ordered without a version bump commit on every merge.
+      # `version` in tauri.conf.json takes precedence over the crate version, so it is
+      # the only place this has to be set: it becomes both the version the running app
+      # reports and the one latest.json advertises.
+      - name: Set the build version
+        id: version
+        env:
+          VERSION: 0.1.${{ github.run_number }}
+        run: |
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          bun --eval '
+            const path = "src-tauri/tauri.conf.json";
+            const config = JSON.parse(await Bun.file(path).text());
+            config.version = process.env.VERSION;
+            await Bun.write(path, JSON.stringify(config, null, 2) + "\n");
+          '
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ad-hoc signing. The bundle is not notarized, so macOS asks for approval in
+          # Privacy & Security the first time it is installed by hand. Updates applied
+          # by the in-app updater replace an already-approved bundle in place.
+          APPLE_SIGNING_IDENTITY: "-"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: bun run tauri
+          tagName: v${{ steps.version.outputs.version }}
+          releaseName: Diffit v${{ steps.version.outputs.version }}
+          releaseBody: |
+            Automated macOS build from main for Apple Silicon Macs.
+
+            Commit: ${{ github.sha }}
+
+            Installed copies update themselves from this release.
+          releaseDraft: false
+          # The updater reads `releases/latest/download/latest.json`, which GitHub only
+          # resolves to a full release, so these must not be marked as prereleases.
+          prerelease: false
+          includeUpdaterJson: true
+          args: --target aarch64-apple-darwin

@@ -4,6 +4,7 @@ import { appActions, appStore, useAppSelector, useShallowAppSelector } from "../
 import { basename } from "../utils/path";
 import { CommitPicker } from "./CommitPicker";
 import { TopBarMenu } from "./TopBarMenu";
+import { UpdateBanner } from "./UpdateBanner";
 
 function SidebarToggle() {
   const sidebarCollapsed = useAppSelector((state) => state.sidebarCollapsed);
@@ -112,6 +113,7 @@ export function AppMessages() {
           {refreshError}
         </div>
       ) : null}
+      <UpdateBanner />
     </>
   );
 }

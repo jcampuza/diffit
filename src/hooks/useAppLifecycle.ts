@@ -7,6 +7,7 @@ import {
   loadWindowRepository,
 } from "../repositoryActions";
 import { appActions, appStore } from "../store";
+import { checkForUpdate, listenForUpdateStatus, loadUpdateStatus } from "../updateActions";
 
 export function useAppLifecycle() {
   useInitialRepositoryLoad();
@@ -15,6 +16,20 @@ export function useAppLifecycle() {
   useAnnotationsChangeListener();
   useWindowFocusRefresh();
   useGlobalShortcuts();
+  useUpdateCheck();
+}
+
+function useUpdateCheck() {
+  useEffect(() => {
+    const unlistenPromise = listenForUpdateStatus();
+    // The status first, so a window opened later shows what the process already found,
+    // then the check itself, which the backend runs only once per process.
+    void loadUpdateStatus().then(() => checkForUpdate());
+
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 }
 
 function useInitialRepositoryLoad() {
